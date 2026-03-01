@@ -425,6 +425,7 @@ async function getPlayerStats(oduserId) {
       myScore: mp.score,
       opponentScore: opponent ? opponent.score : 0,
       opponent: opponent?.User?.username || 'Solo',
+      correctCount: mp.correctCount,
       difficulty: m.difficulty,
       category: m.category,
       mode: m.mode,

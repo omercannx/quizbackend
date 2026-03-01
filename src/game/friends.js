@@ -20,6 +20,13 @@ function isOnline(oduserId) {
   return onlineSockets.has(oduserId);
 }
 
+function getOnlineUsers() {
+  return Array.from(onlineSockets.entries()).map(([userId, data]) => ({
+    userId,
+    username: data.username,
+  }));
+}
+
 async function sendFriendRequest(fromOduserId, toUsername) {
   const fromUser = await UserModel.findOne({ where: { oduserId: fromOduserId } });
   if (!fromUser) return { success: false, error: 'Kullanıcı bulunamadı' };
@@ -161,6 +168,7 @@ module.exports = {
   unregister,
   getSocketId,
   isOnline,
+  getOnlineUsers,
   sendFriendRequest,
   acceptFriendRequest,
   rejectFriendRequest,

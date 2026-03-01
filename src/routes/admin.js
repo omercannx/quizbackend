@@ -14,6 +14,7 @@ const AchievementReward = require('../models/AchievementReward');
 const ChatMessage = require('../models/ChatMessage');
 const CosmeticFrame = require('../models/CosmeticFrame');
 const { getCredentials, setCredentials, ensureDefaultCredentials } = require('../data/admin-credentials');
+const { getOnlineUsers } = require('../game/friends');
 
 const ADMIN_SECRET = process.env.ADMIN_JWT_SECRET || 'quiz-arena-admin-secret-change-in-production';
 
@@ -51,6 +52,12 @@ router.post('/login', (req, res) => {
 });
 
 router.use(adminAuth);
+
+// ── ONLINE KULLANICILAR ──
+router.get('/online-users', (req, res) => {
+  const users = getOnlineUsers();
+  res.json({ users, count: users.length });
+});
 
 // ── ADMIN HESAP AYARLARI (giriş yapmış admin kullanıcı adı/şifre değiştirebilir) ──
 router.get('/credentials', (req, res) => {

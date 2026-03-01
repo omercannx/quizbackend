@@ -79,12 +79,14 @@ router.get('/questions', async (req, res) => {
   if (category) where.category = category;
   if (difficulty) where.difficulty = difficulty;
   if (search && search.trim()) {
-    where[Op.or] = [
+    const searchCond = [
       { text: { [Op.like]: `%${search.trim()}%` } },
       { optionA: { [Op.like]: `%${search.trim()}%` } },
       { optionB: { [Op.like]: `%${search.trim()}%` } },
       { optionC: { [Op.like]: `%${search.trim()}%` } },
-    ];
+      { optionD: { [Op.like]: `%${search.trim()}%` } },
+    ].filter(Boolean);
+    where[Op.or] = searchCond;
   }
 
   const { count, rows } = await QuestionModel.findAndCountAll({
@@ -94,16 +96,20 @@ router.get('/questions', async (req, res) => {
     offset,
   });
 
-  const questions = rows.map((r) => ({
-    id: r.questionKey,
-    dbId: r.id,
-    text: r.text,
-    options: [r.optionA, r.optionB, r.optionC],
-    correct: r.correct,
-    hint: r.hint || '',
-    category: r.category,
-    difficulty: r.difficulty,
-  }));
+  const questions = rows.map((r) => {
+    const opts = [r.optionA, r.optionB, r.optionC];
+    if (r.optionD) opts.push(r.optionD);
+    return {
+      id: r.questionKey,
+      dbId: r.id,
+      text: r.text,
+      options: opts,
+      correct: r.correct,
+      hint: r.hint || '',
+      category: r.category,
+      difficulty: r.difficulty,
+    };
+  });
 
   res.json({ questions, total: count, page: pageNum, totalPages: Math.ceil(count / limit) });
 });

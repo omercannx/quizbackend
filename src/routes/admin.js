@@ -10,6 +10,7 @@ const User = require('../models/User');
 const Match = require('../models/Match');
 const MatchPlayer = require('../models/MatchPlayer');
 const Achievement = require('../models/Achievement');
+const AchievementReward = require('../models/AchievementReward');
 const ChatMessage = require('../models/ChatMessage');
 const CosmeticFrame = require('../models/CosmeticFrame');
 const { getCredentials, setCredentials, ensureDefaultCredentials } = require('../data/admin-credentials');
@@ -141,12 +142,37 @@ router.get('/leaderboard', async (req, res) => {
 });
 
 // ── BAŞARIMLAR & SEVİYE SİSTEMİ ──
-router.get('/achievements-and-levels', (req, res) => {
+router.get('/achievements-and-levels', async (req, res) => {
   try {
     res.json({
-      achievements: getAchievementsWithRewards(),
+      achievements: await getAchievementsWithRewards(),
       levelTiers: getLevelTiers(),
     });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+const ACHIEVEMENT_REWARD_TYPES = ['coin', 'fifty_fifty', 'time_freeze', 'double_points', 'hint'];
+
+router.put('/achievement-rewards/:achievementId', adminAuth, async (req, res) => {
+  try {
+    const { achievementId } = req.params;
+    const { rewardType, rewardValue } = req.body || {};
+    if (!rewardType || !ACHIEVEMENT_REWARD_TYPES.includes(rewardType)) {
+      return res.status(400).json({ error: 'Geçerli rewardType gerekli: coin, fifty_fifty, time_freeze, double_points, hint' });
+    }
+    const value = Math.max(0, parseInt(rewardValue, 10) || 0);
+    const [row, created] = await AchievementReward.findOrCreate({
+      where: { achievementId },
+      defaults: { achievementId, rewardType, rewardValue: value },
+    });
+    if (!created) {
+      row.rewardType = rewardType;
+      row.rewardValue = value;
+      await row.save();
+    }
+    res.json({ success: true, reward: { achievementId: row.achievementId, rewardType: row.rewardType, rewardValue: row.rewardValue } });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

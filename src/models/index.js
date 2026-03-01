@@ -19,6 +19,7 @@ const ChatBan = require('./ChatBan');
 const ShopItem = require('./ShopItem');
 const QuestTemplate = require('./QuestTemplate');
 const CosmeticFrame = require('./CosmeticFrame');
+const AchievementReward = require('./AchievementReward');
 
 // Relations
 Match.belongsTo(User, { as: 'winner', foreignKey: 'winnerId' });
@@ -80,4 +81,5 @@ module.exports = {
   ShopItem,
   QuestTemplate,
   CosmeticFrame,
+  AchievementReward,
 };

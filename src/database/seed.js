@@ -1,4 +1,4 @@
-const { Question, ShopItem, QuestTemplate, Season, CosmeticFrame } = require('../models');
+const { Question, ShopItem, QuestTemplate, Season, CosmeticFrame, AchievementReward } = require('../models');
 
 const seedQuestions = [
   // ─── GENERAL EASY ───
@@ -182,6 +182,26 @@ const defaultFrames = [
   { key: 'frame_legendary', name: 'Efsanevi Çerçeve', unlockLevel: 30, colors: ['#FF6D00', '#FF1744'], style: 'gradient', sortOrder: 5 },
 ];
 
+const defaultAchievementRewards = [
+  { achievementId: 'first_win', rewardType: 'coin', rewardValue: 25 },
+  { achievementId: 'win_5', rewardType: 'coin', rewardValue: 20 },
+  { achievementId: 'win_10', rewardType: 'coin', rewardValue: 30 },
+  { achievementId: 'streak_3', rewardType: 'coin', rewardValue: 15 },
+  { achievementId: 'streak_5', rewardType: 'coin', rewardValue: 40 },
+  { achievementId: 'perfect', rewardType: 'coin', rewardValue: 50 },
+  { achievementId: 'matches_20', rewardType: 'coin', rewardValue: 25 },
+  { achievementId: 'matches_50', rewardType: 'coin', rewardValue: 60 },
+  { achievementId: 'level_10', rewardType: 'coin', rewardValue: 50 },
+  { achievementId: 'level_20', rewardType: 'coin', rewardValue: 75 },
+  { achievementId: 'level_30', rewardType: 'coin', rewardValue: 100 },
+  { achievementId: 'accuracy_80', rewardType: 'coin', rewardValue: 45 },
+  { achievementId: 'streak_10', rewardType: 'fifty_fifty', rewardValue: 1 },
+  { achievementId: 'win_25', rewardType: 'coin', rewardValue: 40 },
+  { achievementId: 'win_50', rewardType: 'double_points', rewardValue: 1 },
+  { achievementId: 'matches_100', rewardType: 'coin', rewardValue: 100 },
+  { achievementId: 'no_abandon', rewardType: 'coin', rewardValue: 75 },
+];
+
 const defaultShopItems = [
   { itemKey: 'fifty_fifty', name: '%50 Eleme', description: '2 yanlış şıkkı eler', price: 80, userField: 'ownedFiftyFifty' },
   { itemKey: 'time_freeze', name: 'Ek Süre', description: '+10 saniye ekstra süre', price: 60, userField: 'ownedTimeFreeze' },
@@ -225,6 +245,13 @@ async function seedDatabase() {
     await CosmeticFrame.bulkCreate(defaultFrames);
     console.log(`${defaultFrames.length} çerçeve eklendi.`);
   }
+
+  const rewardCount = await AchievementReward.count();
+  if (rewardCount === 0) {
+    console.log('Başarım ödülleri yazılıyor...');
+    await AchievementReward.bulkCreate(defaultAchievementRewards);
+    console.log(`${defaultAchievementRewards.length} başarım ödülü eklendi.`);
+  }
 }
 
-module.exports = { seedDatabase, defaultQuestTemplates, defaultShopItems, defaultSeasons, defaultFrames };
+module.exports = { seedDatabase, defaultQuestTemplates, defaultShopItems, defaultSeasons, defaultFrames, defaultAchievementRewards };

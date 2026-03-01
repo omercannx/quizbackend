@@ -1,5 +1,6 @@
 const UserModel = require('../models/User');
 const AchievementModel = require('../models/Achievement');
+const AchievementRewardModel = require('../models/AchievementReward');
 const MatchModel = require('../models/Match');
 const MatchPlayerModel = require('../models/MatchPlayer');
 const CategoryStatModel = require('../models/CategoryStat');
@@ -46,22 +47,52 @@ const ACHIEVEMENTS = [
   { id: 'no_abandon', name: 'Centilmen', desc: '50+ maç oyna, hiç terk etme', check: (p) => p.totalMatches >= 50 && (p.abandons || 0) === 0 },
 ];
 
-const ACHIEVEMENT_REWARDS = {
-  first_win: 'Rozet: İlk Zafer',
-  streak_5: 'Rozet: Seri Katil',
-  perfect: 'Rozet: Mükemmelci',
-  matches_50: 'Rozet: Veteran',
-  accuracy_80: 'Rozet: Keskin Nişancı',
-  matches_100: 'Rozet: Efsane',
+const REWARD_LABELS = {
+  coin: (v) => `${v} Coin`,
+  fifty_fifty: (v) => `${v || 1}x %50 Eleme`,
+  time_freeze: (v) => `${v || 1}x Ek Süre`,
+  double_points: (v) => `${v || 1}x Çift Puan`,
+  hint: (v) => `${v || 1}x İpucu`,
 };
 
-function getAchievementsWithRewards() {
-  return ACHIEVEMENTS.map((a) => ({
-    id: a.id,
-    name: a.name,
-    desc: a.desc,
-    reward: ACHIEVEMENT_REWARDS[a.id] || '—',
-  }));
+async function applyAchievementReward(user, reward) {
+  if (!reward || !reward.rewardType) return;
+  const type = reward.rewardType;
+  const val = Math.max(0, reward.rewardValue || 0);
+  if (type === 'coin' && val > 0) {
+    user.coins = (user.coins || 0) + val;
+  } else if (type === 'fifty_fifty' && val > 0) {
+    user.ownedFiftyFifty = (user.ownedFiftyFifty || 0) + val;
+  } else if (type === 'time_freeze' && val > 0) {
+    user.ownedTimeFreeze = (user.ownedTimeFreeze || 0) + val;
+  } else if (type === 'double_points' && val > 0) {
+    user.ownedDoublePoints = (user.ownedDoublePoints || 0) + val;
+  } else if (type === 'hint' && val > 0) {
+    user.ownedHint = (user.ownedHint || 0) + val;
+  }
+  await user.save();
+}
+
+async function getAchievementsWithRewards() {
+  const rows = await AchievementRewardModel.findAll();
+  const byId = {};
+  rows.forEach((r) => { byId[r.achievementId] = r; });
+  return ACHIEVEMENTS.map((a) => {
+    const r = byId[a.id];
+    const rewardType = r ? r.rewardType : null;
+    const rewardValue = r ? r.rewardValue : 0;
+    const label = rewardType && REWARD_LABELS[rewardType]
+      ? REWARD_LABELS[rewardType](rewardValue)
+      : '—';
+    return {
+      id: a.id,
+      name: a.name,
+      desc: a.desc,
+      reward: label,
+      rewardType: rewardType || null,
+      rewardValue: rewardValue || 0,
+    };
+  });
 }
 
 function getLevelTiers() {
@@ -214,6 +245,8 @@ async function recordMatchResult(oduserId, username, result) {
     if (!existingKeys.includes(ach.id) && ach.check(checkData)) {
       await AchievementModel.create({ userId: user.id, achievementKey: ach.id });
       newAchievements.push({ id: ach.id, name: ach.name, desc: ach.desc });
+      const rewardRow = await AchievementRewardModel.findOne({ where: { achievementId: ach.id } });
+      if (rewardRow) await applyAchievementReward(user, rewardRow);
     }
   }
 

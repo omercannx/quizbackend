@@ -37,10 +37,10 @@ const upload = multer({
 });
 
 // GET achievements & level config (public - for app Başarımlar page)
-router.get('/achievements-config', (req, res) => {
+router.get('/achievements-config', async (req, res) => {
   try {
     res.json({
-      achievements: getAchievementsWithRewards(),
+      achievements: await getAchievementsWithRewards(),
       levelTiers: getLevelTiers(),
     });
   } catch (e) {

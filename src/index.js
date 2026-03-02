@@ -43,14 +43,41 @@ app.get('/', (req, res) => {
   res.send({ status: 'ok', message: 'Quiz Game Backend' });
 });
 
-// Android WebView OAuth redirect - Google buraya yönlendirir (#id_token=xxx hash ile)
-// Sayfa sadece var olmalı, uygulama URL'i openAuthSessionAsync ile yakalar
 app.get('/auth/google/redirect', (req, res) => {
-  res.send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Giriş</title></head>
-<body style="font-family:sans-serif;text-align:center;padding:40px;background:#06060F;color:#fff;">
-<p>Giriş tamamlanıyor...</p>
-<p style="font-size:12px;color:#888;">Bu pencereyi kapatabilirsiniz.</p>
-</body></html>`);
+  res.send(`<!DOCTYPE html>
+<html lang="tr">
+  <head>
+    <meta charset="utf-8" />
+    <title>Giriş Tamamlanıyor...</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:#06060F; color:#fff; text-align:center; padding:40px; }
+      p { margin:8px 0; }
+      .muted { color:#888; font-size:12px; }
+    </style>
+    <script>
+      (function () {
+        try {
+          var hash = window.location.hash ? window.location.hash.substring(1) : "";
+          var query = window.location.search ? window.location.search.substring(1) : "";
+          var params = new URLSearchParams(hash || query);
+          var idToken = params.get("id_token");
+          if (idToken) {
+            var deepLink = "quiz-arena://login#id_token=" + encodeURIComponent(idToken);
+            window.location.href = deepLink;
+            return;
+          }
+        } catch (e) {
+          console.error("Google redirect parse error", e);
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <p>Giriş tamamlanıyor...</p>
+    <p class="muted">Eğer otomatik yönlendirilmezseniz bu pencereyi kapatabilirsiniz.</p>
+  </body>
+</html>`);
 });
 
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));

@@ -2,6 +2,10 @@ const { checkAnswer, getCorrectAnswer, getQuestionHint, getRandomQuestions, getD
 const {
   joinQueue, leaveQueue, createMatch, getMatch, removeMatch, getQueueKey, getWaitingPlayer,
   createPrivateInvite, joinPrivateInvite, createBotPlayer,
+  joinRaceLobby, leaveRaceLobby, takeRaceLobbyForStart, createRaceMatch,
+  RACE_LOBBY_TIMEOUT_MS,
+  joinRoyaleLobby, leaveRoyaleLobby, takeRoyaleLobbyForStart, createRoyaleMatch,
+  ROYALE_LOBBY_TIMEOUT_MS,
 } = require('../game/matchmaking');
 const { recordMatchResult, recordAbandon, recordAbandonWin, getLeaderboard, getPlayerStats, getOrCreatePlayer } = require('../game/leaderboard');
 const friends = require('../game/friends');
@@ -67,6 +71,8 @@ async function deductPowerup(oduserId, powerupType) {
 
 const BOT_FALLBACK_SECONDS = 8;
 const botFallbackTimeouts = new Map();
+const raceLobbyTimers = new Map();
+const royaleLobbyTimers = new Map();
 
 // Bot sohbet mesajları - ince tahrik edici, hakaret içermeyen, çeşitli
 const BOT_CHAT_MESSAGES = [
@@ -103,6 +109,72 @@ const BOT_CHAT_MESSAGES = [
   'Güzel gidiyoruz',
   'Bekle beni geçeceksin 😄',
 ];
+
+async function startRaceMatch(io, players, difficulty, category) {
+  const match = await createRaceMatch(players, difficulty, category);
+  for (const p of players) {
+    if (p.socketId) {
+      const s = io.sockets.sockets.get(p.socketId);
+      if (s) s.join(match.id);
+    }
+  }
+  const realPlayerIds = players.filter((p) => !p.userId?.startsWith('bot_')).map((p) => p.userId);
+  const avatarResults = await Promise.all(realPlayerIds.map((uid) => UserModel.findOne({ where: { oduserId: uid }, attributes: ['avatar'] })));
+  const avatarMap = {};
+  realPlayerIds.forEach((uid, i) => { avatarMap[uid] = avatarResults[i]?.avatar || null; });
+  const playersPayload = players.map((p) => ({
+    userId: p.userId,
+    username: p.username,
+    avatar: p.userId?.startsWith('bot_') ? null : (avatarMap[p.userId] || null),
+  }));
+  const playerPowerups = {};
+  for (const p of players) playerPowerups[p.userId] = match.players[p.userId]?.powerups || {};
+  io.to(match.id).emit('match_found', {
+    matchId: match.id,
+    difficulty,
+    category: match.category,
+    mode: 'race',
+    players: playersPayload,
+    totalQuestions: match.questions.length,
+    timePerQuestion: match.timePerQuestion,
+    playerPowerups,
+  });
+  const hasBots = players.some((p) => p.userId?.startsWith('bot_'));
+  if (hasBots) match.isBotMatch = true;
+  setTimeout(() => sendQuestion(io, match.id), 3000);
+}
+
+async function startRoyaleMatch(io, players, difficulty, category) {
+  const match = await createRoyaleMatch(players, difficulty, category);
+  for (const p of players) {
+    if (p.socketId) {
+      const s = io.sockets.sockets.get(p.socketId);
+      if (s) s.join(match.id);
+    }
+  }
+  const realPlayerIds = players.filter((p) => !p.userId?.startsWith('bot_')).map((p) => p.userId);
+  const avatarResults = await Promise.all(realPlayerIds.map((uid) => UserModel.findOne({ where: { oduserId: uid }, attributes: ['avatar'] })));
+  const avatarMap = {};
+  realPlayerIds.forEach((uid, i) => { avatarMap[uid] = avatarResults[i]?.avatar || null; });
+  const playersPayload = players.map((p) => ({
+    userId: p.userId,
+    username: p.username,
+    avatar: p.userId?.startsWith('bot_') ? null : (avatarMap[p.userId] || null),
+  }));
+  io.to(match.id).emit('match_found', {
+    matchId: match.id,
+    difficulty,
+    category: match.category,
+    mode: 'royale',
+    players: playersPayload,
+    totalQuestions: match.questions.length,
+    timePerQuestion: match.timePerQuestion,
+    playerPowerups: {},
+  });
+  const hasBots = players.some((p) => p.userId?.startsWith('bot_'));
+  if (hasBots) match.isBotMatch = true;
+  setTimeout(() => sendRoyaleQuestion(io, match.id), 2000);
+}
 
 function maybeSendBotChat(io, match) {
   if (!match.isBotMatch) return;
@@ -146,6 +218,50 @@ function setupGameSocket(io) {
       }
       if (mode === 'survival') {
         handleSurvivalMode(socket, userId, username, category);
+        return;
+      }
+      if (mode === 'race') {
+        const myPowerups = await loadPlayerPowerups(userId);
+        const playerData = { socketId: socket.id, userId, username, powerups: myPowerups };
+        const result = joinRaceLobby(playerData, difficulty, category);
+        if (result.error) { socket.emit('queue_error', { error: result.error }); return; }
+        if (result.started) {
+          await startRaceMatch(io, result.players, difficulty, category);
+          return;
+        }
+        socket.emit('queue_waiting', { message: `Sıralı Yarış lobisi (${result.count}/3)...` });
+        const key = result.key;
+        const prev = raceLobbyTimers.get(key);
+        if (prev) clearTimeout(prev);
+        const t = setTimeout(async () => {
+          raceLobbyTimers.delete(key);
+          const players = takeRaceLobbyForStart(key);
+          if (!players || players.length === 0) return;
+          await startRaceMatch(io, players, difficulty, category);
+        }, RACE_LOBBY_TIMEOUT_MS);
+        raceLobbyTimers.set(key, t);
+        return;
+      }
+      if (mode === 'royale') {
+        const myPowerups = await loadPlayerPowerups(userId);
+        const playerData = { socketId: socket.id, userId, username, powerups: myPowerups };
+        const result = joinRoyaleLobby(playerData, difficulty, category);
+        if (result.error) { socket.emit('queue_error', { error: result.error }); return; }
+        if (result.started) {
+          await startRoyaleMatch(io, result.players, difficulty, category);
+          return;
+        }
+        socket.emit('queue_waiting', { message: `Hayatta Kal lobisi (${result.count}/10)...` });
+        const key = result.key;
+        const prev = royaleLobbyTimers.get(key);
+        if (prev) clearTimeout(prev);
+        const t = setTimeout(async () => {
+          royaleLobbyTimers.delete(key);
+          const players = takeRoyaleLobbyForStart(key);
+          if (!players || players.length === 0) return;
+          await startRoyaleMatch(io, players, difficulty, category);
+        }, ROYALE_LOBBY_TIMEOUT_MS);
+        royaleLobbyTimers.set(key, t);
         return;
       }
 
@@ -232,6 +348,8 @@ function setupGameSocket(io) {
     socket.on('queue_leave', () => {
       const prev = botFallbackTimeouts.get(socket.id);
       if (prev) { clearTimeout(prev.timeout); botFallbackTimeouts.delete(socket.id); }
+      leaveRaceLobby(socket.id);
+      leaveRoyaleLobby(socket.id);
       leaveQueue(socket.id);
       socket.emit('queue_left');
     });
@@ -332,8 +450,8 @@ function setupGameSocket(io) {
         });
       }
 
-      // Reward the opponent who stayed (bot değilse)
-      if (opponentId && !opponentId.startsWith('bot_') && match.players[opponentId]) {
+      // Reward the opponent who stayed (bot değilse) - race/royale modunda abandon win verme
+      if (match.mode !== 'race' && match.mode !== 'royale' && opponentId && !opponentId.startsWith('bot_') && match.players[opponentId]) {
         const opp = match.players[opponentId];
         const oppAnswered = Object.values(opp.answers).filter((a) => a.correct).length;
         const totalAsked = match.currentQuestionIndex + 1;
@@ -353,17 +471,43 @@ function setupGameSocket(io) {
     });
 
     // ── ANSWER ──
-    socket.on('submit_answer', async ({ matchId, userId, questionId, selected }) => {
+    socket.on('submit_answer', async ({ matchId, userId, questionId, selected, responseTime }) => {
       const match = getMatch(matchId);
       if (!match || match.status !== 'playing') return;
       const player = match.players[userId];
       if (!player || player.answers[questionId] !== undefined) return;
 
+      if (match.mode === 'royale') {
+        const isCorrect = await checkAnswer(questionId, selected);
+        player.answers[questionId] = { selected, correct: isCorrect };
+        match.answeredThisRound.add(userId);
+        if (!isCorrect) {
+          player.alive = false;
+          player.eliminatedAt = match.currentQuestionIndex;
+          io.to(matchId).emit('player_eliminated', { userId, username: player.username });
+        } else {
+          io.to(matchId).emit('player_answered', { userId });
+        }
+        const aliveIds = Object.keys(match.players).filter((id) => match.players[id].alive);
+        const aliveAnswered = aliveIds.filter((id) => match.answeredThisRound.has(id));
+        if (aliveAnswered.length >= aliveIds.length) {
+          if (match.timer) { clearTimeout(match.timer); match.timer = null; }
+          sendRoyaleRoundResult(io, match);
+        }
+        return;
+      }
+
       const isCorrect = await checkAnswer(questionId, selected);
-      player.answers[questionId] = { selected, correct: isCorrect };
+      player.answers[questionId] = { selected, correct: isCorrect, responseTime };
 
       if (isCorrect) {
         let points = match.difficulty === 'easy' ? 10 : match.difficulty === 'medium' ? 20 : 30;
+        if (match.mode === 'race' && match.questionSentAt && typeof responseTime === 'number') {
+          const totalMs = match.timePerQuestion * 1000;
+          const remaining = Math.max(0, totalMs - responseTime);
+          const speedBonus = Math.floor((remaining / totalMs) * 15);
+          points += speedBonus;
+        }
         if (player.doubleActive) { points *= 2; player.doubleActive = false; }
         player.score += points;
         player.correctCount++;
@@ -373,7 +517,6 @@ function setupGameSocket(io) {
 
       match.answeredThisRound.add(userId);
 
-      // Notify all clients that this player has answered (for UI feedback)
       io.to(matchId).emit('player_answered', { userId });
 
       if (Object.keys(match.players).every((id) => match.answeredThisRound.has(id))) {
@@ -1265,6 +1408,162 @@ function sendSurvivalQuestion(socket, state) {
   }, 13000);
 }
 
+// ── BATTLE ROYALE FLOW ──
+function sendRoyaleQuestion(io, matchId) {
+  const match = getMatch(matchId);
+  if (!match || match.status !== 'playing') return;
+  const aliveIds = Object.keys(match.players).filter((id) => match.players[id].alive);
+  if (aliveIds.length <= 1) {
+    endRoyaleMatch(io, match);
+    return;
+  }
+  let idx = match.currentQuestionIndex;
+  while (idx < match.questions.length) {
+    const question = match.questions[idx];
+    match.answeredThisRound = new Set();
+    match.questionSentAt = Date.now();
+    match.currentQuestionIndex = idx;
+    io.to(matchId).emit('new_question', {
+      questionIndex: idx,
+      totalQuestions: match.questions.length,
+      question: { id: question.id, text: question.text, options: question.options },
+      timePerQuestion: match.timePerQuestion,
+      survivorsCount: aliveIds.length,
+    });
+    match.timer = setTimeout(() => sendRoyaleRoundResult(io, match), match.timePerQuestion * 1000);
+    if (match.isBotMatch) scheduleRoyaleBotAnswers(io, match);
+    return;
+  }
+  endRoyaleMatch(io, match);
+}
+
+function scheduleRoyaleBotAnswers(io, match) {
+  const botIds = Object.keys(match.players).filter((id) => id.startsWith('bot_') && match.players[id].alive);
+  const question = match.questions[match.currentQuestionIndex];
+  if (!question) return;
+  const correctChance = match.difficulty === 'easy' ? 0.75 : match.difficulty === 'medium' ? 0.6 : 0.45;
+  const wrongIndices = question.options ? question.options.map((_, i) => i).filter((i) => i !== question.correct) : [];
+
+  for (const botId of botIds) {
+    const isCorrect = Math.random() < correctChance;
+    const selected = isCorrect ? question.correct : (wrongIndices.length > 0 ? wrongIndices[Math.floor(Math.random() * wrongIndices.length)] : 0);
+    const delayMs = 1500 + Math.random() * 6000;
+    setTimeout(async () => {
+      const m = getMatch(match.id);
+      if (!m || m.status !== 'playing' || m.currentQuestionIndex !== match.currentQuestionIndex) return;
+      const bot = m.players[botId];
+      if (!bot || !bot.alive || bot.answers[question.id] !== undefined) return;
+
+      bot.answers[question.id] = { selected, correct: isCorrect };
+      m.answeredThisRound.add(botId);
+      if (!isCorrect) {
+        bot.alive = false;
+        bot.eliminatedAt = m.currentQuestionIndex;
+        io.to(m.id).emit('player_eliminated', { userId: botId, username: bot.username });
+      } else {
+        io.to(m.id).emit('player_answered', { userId: botId });
+      }
+      const aliveIds = Object.keys(m.players).filter((id) => m.players[id].alive);
+      const aliveAnswered = aliveIds.filter((id) => m.answeredThisRound.has(id));
+      if (aliveAnswered.length >= aliveIds.length) {
+        if (m.timer) { clearTimeout(m.timer); m.timer = null; }
+        sendRoyaleRoundResult(io, m);
+      }
+    }, delayMs);
+  }
+}
+
+async function sendRoyaleRoundResult(io, match) {
+  if (match.timer) { clearTimeout(match.timer); match.timer = null; }
+  const idx = match.currentQuestionIndex;
+  const question = match.questions[idx];
+  const correctAnswer = await getCorrectAnswer(question.id);
+
+  const aliveIds = Object.keys(match.players).filter((id) => match.players[id].alive);
+  for (const pId of aliveIds) {
+    const p = match.players[pId];
+    const answer = p.answers[question.id];
+    if (!answer) {
+      p.alive = false;
+      p.eliminatedAt = idx;
+    } else if (!answer.correct) {
+      p.alive = false;
+      p.eliminatedAt = idx;
+    }
+  }
+
+  const eliminatedThisRound = Object.keys(match.players).filter((id) => match.players[id].eliminatedAt === idx);
+  const survivors = Object.keys(match.players).filter((id) => match.players[id].alive);
+
+  io.to(match.id).emit('round_result', {
+    questionIndex: idx,
+    correctAnswer,
+    results: Object.fromEntries(
+      Object.entries(match.players).map(([id, p]) => [
+        id,
+        { username: p.username, selected: p.answers[question.id]?.selected ?? -1, correct: p.answers[question.id]?.correct ?? false },
+      ])
+    ),
+    eliminated: eliminatedThisRound.map((id) => ({ userId: id, username: match.players[id].username })),
+    survivorsCount: survivors.length,
+  });
+
+  match.currentQuestionIndex++;
+  if (survivors.length <= 1) {
+    setTimeout(() => endRoyaleMatch(io, match), 2500);
+  } else {
+    setTimeout(() => sendRoyaleQuestion(io, match.id), 2500);
+  }
+}
+
+async function endRoyaleMatch(io, match) {
+  if (match.timer) { clearTimeout(match.timer); match.timer = null; }
+  match.status = 'finished';
+  const survivors = Object.keys(match.players).filter((id) => match.players[id].alive);
+  const winnerId = survivors.length === 1 ? survivors[0] : null;
+  const scores = {};
+  for (const [id, p] of Object.entries(match.players)) {
+    scores[id] = { username: p.username, alive: p.alive, eliminatedAt: p.eliminatedAt };
+  }
+  const leaderboard = [...Object.entries(match.players)]
+    .sort((a, b) => {
+      if (a[1].alive && !b[1].alive) return -1;
+      if (!a[1].alive && b[1].alive) return 1;
+      return (a[1].eliminatedAt ?? 999) - (b[1].eliminatedAt ?? 999);
+    })
+    .map(([id, p]) => ({ userId: id, username: p.username, alive: p.alive, eliminatedAt: p.eliminatedAt }));
+
+  const coinGains = {};
+  for (const pId of Object.keys(match.players)) {
+    if (pId.startsWith('bot_')) { coinGains[pId] = 0; continue; }
+    const result = await recordMatchResult(pId, match.players[pId].username, {
+      matchKey: match.id,
+      won: winnerId === pId,
+      draw: winnerId === null,
+      myScore: winnerId === pId ? 1 : 0,
+      opponentScore: 0,
+      opponentUsername: 'Battle Royale',
+      correctAnswers: Object.values(match.players[pId].answers).filter((a) => a.correct).length,
+      totalQuestions: match.currentQuestionIndex,
+      category: match.category,
+      difficulty: match.difficulty,
+      mode: 'royale',
+    });
+    coinGains[pId] = result?.coinGain || 0;
+  }
+
+  io.to(match.id).emit('match_finished', {
+    matchId: match.id,
+    scores,
+    winnerId,
+    draw: winnerId === null,
+    coinGains,
+    leaderboard,
+    mode: 'royale',
+  });
+  setTimeout(() => removeMatch(match.id), 10000);
+}
+
 // ── MULTIPLAYER ROUND FLOW ──
 function sendQuestion(io, matchId) {
   const match = getMatch(matchId);
@@ -1284,8 +1583,49 @@ function sendQuestion(io, matchId) {
   match.timer = setTimeout(() => sendRoundResult(io, match), match.timePerQuestion * 1000);
 
   if (match.isBotMatch) {
-    scheduleBotAnswer(io, match);
-    setTimeout(() => maybeSendBotChat(io, match), 4000 + Math.random() * 6000);
+    if (match.mode === 'race') scheduleRaceBotAnswers(io, match);
+    else {
+      scheduleBotAnswer(io, match);
+      setTimeout(() => maybeSendBotChat(io, match), 4000 + Math.random() * 6000);
+    }
+  }
+}
+
+function scheduleRaceBotAnswers(io, match) {
+  const botIds = Object.keys(match.players).filter((id) => id.startsWith('bot_'));
+  const question = match.questions[match.currentQuestionIndex];
+  if (!question) return;
+  const correctChance = match.difficulty === 'easy' ? 0.7 : match.difficulty === 'medium' ? 0.55 : 0.4;
+  const wrongIndices = question.options ? question.options.map((_, i) => i).filter((i) => i !== question.correct) : [];
+
+  for (const botId of botIds) {
+    const isCorrect = Math.random() < correctChance;
+    const selected = isCorrect ? question.correct : (wrongIndices.length > 0 ? wrongIndices[Math.floor(Math.random() * wrongIndices.length)] : 0);
+    const delayMs = 2000 + Math.random() * 8000;
+    setTimeout(async () => {
+      const m = getMatch(match.id);
+      if (!m || m.status !== 'playing' || m.currentQuestionIndex !== match.currentQuestionIndex) return;
+      const bot = m.players[botId];
+      if (!bot || bot.answers[question.id] !== undefined) return;
+
+      const responseTime = delayMs;
+      bot.answers[question.id] = { selected, correct: isCorrect, responseTime };
+      if (isCorrect) {
+        let points = m.difficulty === 'easy' ? 10 : m.difficulty === 'medium' ? 20 : 30;
+        const totalMs = m.timePerQuestion * 1000;
+        const remaining = Math.max(0, totalMs - responseTime);
+        points += Math.floor((remaining / totalMs) * 15);
+        bot.score += points;
+        bot.correctCount++;
+      }
+      m.answeredThisRound.add(botId);
+      io.to(m.id).emit('player_answered', { userId: botId });
+
+      if (Object.keys(m.players).every((id) => m.answeredThisRound.has(id))) {
+        if (m.timer) { clearTimeout(m.timer); m.timer = null; }
+        sendRoundResult(io, m);
+      }
+    }, delayMs);
   }
 }
 
@@ -1337,9 +1677,13 @@ async function sendRoundResult(io, match) {
   }
 
   const correctAnswer = await getCorrectAnswer(question.id);
-  io.to(match.id).emit('round_result', { questionIndex: idx, correctAnswer, results });
+  const payload = { questionIndex: idx, correctAnswer, results };
+  if (match.mode === 'race') {
+    payload.leaderboard = playerIds.sort((a, b) => match.players[b].score - match.players[a].score).map((id) => ({ userId: id, username: match.players[id].username, score: match.players[id].score }));
+  }
+  io.to(match.id).emit('round_result', payload);
 
-  if (match.isBotMatch) setTimeout(() => maybeSendBotChat(io, match), 4000 + Math.random() * 5000);
+  if (match.isBotMatch && match.mode !== 'race') setTimeout(() => maybeSendBotChat(io, match), 4000 + Math.random() * 5000);
 
   match.currentQuestionIndex++;
   setTimeout(() => {
@@ -1349,7 +1693,10 @@ async function sendRoundResult(io, match) {
 }
 
 async function endMatch(io, match) {
-  // For multiplayer modes (1v1, quick) ve bot maçları da dahil - oylama fazına gir
+  if (match.mode === 'race') {
+    finalizeMatch(io, match);
+    return;
+  }
   if (match.mode === '1v1' || match.mode === 'quick') {
     match.status = 'voting';
     match.votes = {};
@@ -1451,7 +1798,10 @@ async function finalizeMatch(io, match) {
   for (const pId of playerIds) scores[pId] = { username: match.players[pId].username, score: match.players[pId].score };
 
   let winnerId = null;
-  if (playerIds.length === 2) {
+  if (match.mode === 'race') {
+    const sorted = playerIds.sort((a, b) => match.players[b].score - match.players[a].score);
+    winnerId = sorted[0];
+  } else if (playerIds.length === 2) {
     const [p1, p2] = playerIds;
     if (match.players[p1].score > match.players[p2].score) winnerId = p1;
     else if (match.players[p2].score > match.players[p1].score) winnerId = p2;
@@ -1477,19 +1827,36 @@ async function finalizeMatch(io, match) {
     coinGains[pId] = result?.coinGain || 0;
   }
 
-  io.to(match.id).emit('match_finished', { matchId: match.id, scores, winnerId, draw: winnerId === null, coinGains });
+  const payload = { matchId: match.id, scores, winnerId, draw: winnerId === null, coinGains };
+  if (match.mode === 'race') {
+    payload.leaderboard = playerIds.sort((a, b) => match.players[b].score - match.players[a].score).map((id) => ({ userId: id, username: match.players[id].username, score: match.players[id].score }));
+  }
+  io.to(match.id).emit('match_finished', payload);
   setTimeout(() => removeMatch(match.id), 10000);
 }
 
 function handlePlayerDisconnect(io, socketId) {
-  for (const [matchId, match] of require('../game/matchmaking').activeMatches) {
-    for (const [, player] of Object.entries(match.players)) {
+  const { activeMatches, removeMatch } = require('../game/matchmaking');
+  for (const [matchId, match] of activeMatches) {
+    for (const [userId, player] of Object.entries(match.players)) {
       if (player.socketId === socketId) {
-        match.status = 'finished';
-        if (match.timer) clearTimeout(match.timer);
-        if (match.voteTimer) { clearTimeout(match.voteTimer); match.voteTimer = null; }
-        io.to(matchId).emit('opponent_left', {});
-        removeMatch(matchId);
+        if (match.mode === 'royale' && player.alive) {
+          player.alive = false;
+          player.eliminatedAt = match.currentQuestionIndex;
+          io.to(matchId).emit('player_eliminated', { userId, username: player.username });
+          const survivors = Object.keys(match.players).filter((id) => match.players[id].alive);
+          if (survivors.length <= 1) {
+            match.status = 'finished';
+            if (match.timer) clearTimeout(match.timer);
+            setTimeout(() => endRoyaleMatch(io, match), 500);
+          }
+        } else {
+          match.status = 'finished';
+          if (match.timer) clearTimeout(match.timer);
+          if (match.voteTimer) { clearTimeout(match.voteTimer); match.voteTimer = null; }
+          io.to(matchId).emit('opponent_left', {});
+          removeMatch(matchId);
+        }
         return;
       }
     }

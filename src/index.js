@@ -54,7 +54,14 @@ app.get('/auth/google/redirect', (req, res) => {
       body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background:#06060F; color:#fff; text-align:center; padding:40px; }
       p { margin:8px 0; }
       .muted { color:#888; font-size:12px; }
+      .err { color:#f44336; font-size:14px; margin-top:20px; }
     </style>
+  </head>
+  <body>
+    <div id="msg">
+      <p>Giriş tamamlanıyor...</p>
+      <p class="muted">Uygulamaya yönlendiriliyorsunuz.</p>
+    </div>
     <script>
       (function () {
         try {
@@ -64,18 +71,16 @@ app.get('/auth/google/redirect', (req, res) => {
           var idToken = params.get("id_token");
           if (idToken) {
             var deepLink = "quiz-arena://login#id_token=" + encodeURIComponent(idToken);
-            window.location.href = deepLink;
+            window.location.replace(deepLink);
             return;
           }
+          document.getElementById("msg").innerHTML = "<p class=\"err\">Token alınamadı. Uygulamaya dönüp tekrar deneyin.</p>";
         } catch (e) {
           console.error("Google redirect parse error", e);
+          document.getElementById("msg").innerHTML = "<p class=\"err\">Bir hata oluştu. Bu pencereyi kapatıp tekrar deneyin.</p>";
         }
       })();
     </script>
-  </head>
-  <body>
-    <p>Giriş tamamlanıyor...</p>
-    <p class="muted">Eğer otomatik yönlendirilmezseniz bu pencereyi kapatabilirsiniz.</p>
   </body>
 </html>`);
 });

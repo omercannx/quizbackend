@@ -77,6 +77,7 @@ app.get('/auth/google/redirect', (req, res) => {
             if (m) idToken = decodeURIComponent(m[1]);
           }
           if (!idToken) {
+            fetch("/api/auth/google-redirect-debug", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ hash: hash, url: window.location.href, error: "token_not_found" }) }).catch(function(){});
             document.getElementById("msg").innerHTML = "<p class=\"err\">Token alınamadı. Uygulamaya dönüp tekrar deneyin.</p>";
             return;
           }
@@ -92,6 +93,8 @@ app.get('/auth/google/redirect', (req, res) => {
             document.getElementById("msg").innerHTML = "<p class=\"muted\">Otomatik yönlendirme çalışmadıysa aşağıdaki butona dokunun.</p>";
           }, 1500);
         } catch (e) {
+          var hash = window.location.hash ? window.location.hash.substring(1) : "";
+          fetch("/api/auth/google-redirect-debug", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ hash: hash, url: window.location.href, error: String(e && e.message) }) }).catch(function(){});
           console.error("Google redirect parse error", e);
           document.getElementById("msg").innerHTML = "<p class=\"err\">Bir hata oluştu. Bu pencereyi kapatıp tekrar deneyin.</p>";
         }
@@ -99,6 +102,12 @@ app.get('/auth/google/redirect', (req, res) => {
     </script>
   </body>
 </html>`);
+});
+
+app.post('/api/auth/google-redirect-debug', (req, res) => {
+  const { hash, url, error } = req.body || {};
+  console.error('[Google Redirect Debug]', { hash: hash?.slice(0, 100), url, error });
+  res.json({ ok: true });
 });
 
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));

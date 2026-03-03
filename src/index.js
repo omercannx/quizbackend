@@ -82,14 +82,16 @@ app.get('/auth/google/redirect', (req, res) => {
             document.getElementById("msg").innerHTML = "<p class=\"err\">Token alınamadı. Uygulamaya dönüp tekrar deneyin.</p>";
             return;
           }
-          new Image().src = "/api/auth/google-redirect-debug?success=1&hashLen=" + hash.length + "&t=" + Date.now();
           var deepLink = "quiz-arena://login#id_token=" + encodeURIComponent(idToken);
           var isAndroid = /Android/i.test(navigator.userAgent);
           var intentUrl = "intent://login#id_token=" + encodeURIComponent(idToken) + "#Intent;scheme=quiz-arena;package=com.quizarena.app;end";
           var targetUrl = isAndroid ? intentUrl : deepLink;
           var btn = document.getElementById("openBtn");
           btn.href = targetUrl;
-          window.location.href = targetUrl;
+          var blob = new Blob([JSON.stringify({ success: true, hashLen: hash.length })], { type: "application/json" });
+          if (navigator.sendBeacon) { navigator.sendBeacon("/api/auth/google-redirect-debug", blob); }
+          else { fetch("/api/auth/google-redirect-debug", { method: "POST", body: blob, keepalive: true }); }
+          setTimeout(function(){ window.location.href = targetUrl; }, 150);
           btn.style.display = "inline-block";
           setTimeout(function() {
             document.getElementById("msg").innerHTML = "<p class=\"muted\">Otomatik yönlendirme çalışmadıysa aşağıdaki butona dokunun.</p>";

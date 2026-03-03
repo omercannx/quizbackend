@@ -55,6 +55,8 @@ app.get('/auth/google/redirect', (req, res) => {
       p { margin:8px 0; }
       .muted { color:#888; font-size:12px; }
       .err { color:#f44336; font-size:14px; margin-top:20px; }
+      .btn { display:inline-block; margin-top:20px; padding:12px 24px; background:#208AEF; color:#fff; border-radius:8px; text-decoration:none; font-weight:600; }
+      .btn:hover { background:#1a7ad4; }
     </style>
   </head>
   <body>
@@ -62,6 +64,7 @@ app.get('/auth/google/redirect', (req, res) => {
       <p>Giriş tamamlanıyor...</p>
       <p class="muted">Uygulamaya yönlendiriliyorsunuz.</p>
     </div>
+    <a id="openBtn" href="#" class="btn" style="display:none;">Uygulamayı Aç</a>
     <script>
       (function () {
         try {
@@ -69,12 +72,21 @@ app.get('/auth/google/redirect', (req, res) => {
           var query = window.location.search ? window.location.search.substring(1) : "";
           var params = new URLSearchParams(hash || query);
           var idToken = params.get("id_token");
-          if (idToken) {
-            var deepLink = "quiz-arena://login#id_token=" + encodeURIComponent(idToken);
-            window.location.replace(deepLink);
+          if (!idToken) {
+            document.getElementById("msg").innerHTML = "<p class=\"err\">Token alınamadı. Uygulamaya dönüp tekrar deneyin.</p>";
             return;
           }
-          document.getElementById("msg").innerHTML = "<p class=\"err\">Token alınamadı. Uygulamaya dönüp tekrar deneyin.</p>";
+          var deepLink = "quiz-arena://login#id_token=" + encodeURIComponent(idToken);
+          var isAndroid = /Android/i.test(navigator.userAgent);
+          var intentUrl = "intent://login#id_token=" + encodeURIComponent(idToken) + "#Intent;scheme=quiz-arena;package=com.quizarena.app;end";
+          var targetUrl = isAndroid ? intentUrl : deepLink;
+          var btn = document.getElementById("openBtn");
+          btn.href = targetUrl;
+          window.location.href = targetUrl;
+          btn.style.display = "inline-block";
+          setTimeout(function() {
+            document.getElementById("msg").innerHTML = "<p class=\"muted\">Otomatik yönlendirme çalışmadıysa aşağıdaki butona dokunun.</p>";
+          }, 1500);
         } catch (e) {
           console.error("Google redirect parse error", e);
           document.getElementById("msg").innerHTML = "<p class=\"err\">Bir hata oluştu. Bu pencereyi kapatıp tekrar deneyin.</p>";

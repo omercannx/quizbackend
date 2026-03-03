@@ -56,16 +56,16 @@ app.get('/auth/google/redirect', (req, res) => {
       p { margin:8px 0; }
       .muted { color:#888; font-size:12px; }
       .err { color:#f44336; font-size:14px; margin-top:20px; }
-      .btn { display:inline-block; margin-top:20px; padding:12px 24px; background:#208AEF; color:#fff; border-radius:8px; text-decoration:none; font-weight:600; }
+      .btn { display:inline-block; margin-top:24px; padding:16px 32px; background:#208AEF; color:#fff; border-radius:12px; text-decoration:none; font-weight:700; font-size:18px; }
       .btn:hover { background:#1a7ad4; }
     </style>
   </head>
   <body>
     <div id="msg">
-      <p>Giriş tamamlanıyor...</p>
-      <p class="muted">Uygulamaya yönlendiriliyorsunuz.</p>
+      <p>Giriş tamamlandı!</p>
+      <p class="muted">Uygulamaya geçmek için aşağıdaki butona dokunun.</p>
     </div>
-    <a id="openBtn" href="#" class="btn" style="display:none;">Uygulamayı Aç</a>
+    <a id="openBtn" href="#" class="btn" style="display:none;" onclick="window.location.href=this.getAttribute('data-url');return false;">Uygulamayı Aç</a>
     <script>
       (function () {
         try {
@@ -85,17 +85,13 @@ app.get('/auth/google/redirect', (req, res) => {
           var deepLink = "quiz-arena://login#id_token=" + encodeURIComponent(idToken);
           var isAndroid = /Android/i.test(navigator.userAgent);
           var intentUrl = "intent://login#id_token=" + encodeURIComponent(idToken) + "#Intent;scheme=quiz-arena;package=com.quizarena.app;end";
-          var targetUrl = isAndroid ? intentUrl : deepLink;
           var btn = document.getElementById("openBtn");
+          var targetUrl = isAndroid ? intentUrl : deepLink;
           btn.href = targetUrl;
-          var blob = new Blob([JSON.stringify({ success: true, hashLen: hash.length })], { type: "application/json" });
-          if (navigator.sendBeacon) { navigator.sendBeacon("/api/auth/google-redirect-debug", blob); }
-          else { fetch("/api/auth/google-redirect-debug", { method: "POST", body: blob, keepalive: true }); }
-          setTimeout(function(){ window.location.href = targetUrl; }, 150);
+          btn.setAttribute("data-url", targetUrl);
           btn.style.display = "inline-block";
-          setTimeout(function() {
-            document.getElementById("msg").innerHTML = "<p class=\"muted\">Otomatik yönlendirme çalışmadıysa aşağıdaki butona dokunun.</p>";
-          }, 1500);
+          try { navigator.sendBeacon("/api/auth/google-redirect-debug", new Blob([JSON.stringify({ success: true })], { type: "application/json" })); } catch(e){}
+          try { window.location.href = deepLink; } catch(e){}
         } catch (e) {
           var hash = window.location.hash ? window.location.hash.substring(1) : "";
           new Image().src = "/api/auth/google-redirect-debug?error=" + encodeURIComponent(String(e && e.message || "unknown")) + "&hashLen=" + (hash ? hash.length : 0);

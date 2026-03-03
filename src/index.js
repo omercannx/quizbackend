@@ -72,6 +72,10 @@ app.get('/auth/google/redirect', (req, res) => {
           var query = window.location.search ? window.location.search.substring(1) : "";
           var params = new URLSearchParams(hash || query);
           var idToken = params.get("id_token");
+          if (!idToken && hash) {
+            var m = hash.match(/id_token=([^&]+)/);
+            if (m) idToken = decodeURIComponent(m[1]);
+          }
           if (!idToken) {
             document.getElementById("msg").innerHTML = "<p class=\"err\">Token alınamadı. Uygulamaya dönüp tekrar deneyin.</p>";
             return;

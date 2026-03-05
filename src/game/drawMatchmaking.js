@@ -108,7 +108,40 @@ function getDrawMatch(matchId) {
 function removeDrawMatch(matchId) {
   const match = drawMatches.get(matchId);
   if (match && match.roundTimer) clearTimeout(match.roundTimer);
+  if (match && match.kickVoteTimer) clearTimeout(match.kickVoteTimer);
   drawMatches.delete(matchId);
+}
+
+/** Oyuncuyu maçtan çıkarır, kalan oyuncu sayısını döner. 2'den az kalırsa oyun bitmeli. */
+function removePlayerFromMatch(matchId, userId) {
+  const match = drawMatches.get(matchId);
+  if (!match || !match.players[userId]) return null;
+
+  const p = match.players[userId];
+  delete match.players[userId];
+  delete match.scores[userId];
+
+  const orderIdx = match.playerOrder.indexOf(userId);
+  if (orderIdx >= 0) {
+    match.playerOrder.splice(orderIdx, 1);
+    if (match.currentDrawerIndex >= match.playerOrder.length) {
+      match.currentDrawerIndex = Math.max(0, match.playerOrder.length - 1);
+    } else if (orderIdx <= match.currentDrawerIndex && match.currentDrawerIndex > 0) {
+      match.currentDrawerIndex--;
+    }
+  }
+
+  match.kickVote = null;
+  if (match.kickVoteTimer) {
+    clearTimeout(match.kickVoteTimer);
+    match.kickVoteTimer = null;
+  }
+
+  if (match.playersPayload) {
+    match.playersPayload = match.playersPayload.filter((x) => x.userId !== userId);
+  }
+
+  return { remainingCount: match.playerOrder.length, socketId: p?.socketId };
 }
 
 function getCurrentDrawer(match) {
@@ -141,6 +174,7 @@ module.exports = {
   createDrawMatch,
   getDrawMatch,
   removeDrawMatch,
+  removePlayerFromMatch,
   getCurrentDrawer,
   getCurrentWord,
   checkGuess,

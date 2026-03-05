@@ -21,6 +21,7 @@ const ShopItemModel = require('../models/ShopItem');
 const { isChatBanned } = require('../game/chatBan');
 const { generateDailyQuests, generateWeeklyQuests, getQuests, claimQuestReward } = require('../game/quests');
 const { getSeasonInfo, claimSeasonReward } = require('../game/seasons');
+const { setupDrawHandlers } = require('./drawHandler');
 
 const COSMETICS = {
   frames: [
@@ -195,6 +196,8 @@ function setupGameSocket(io) {
   io.on('connection', (socket) => {
     let currentUserId = null;
     let currentUsername = null;
+
+    setupDrawHandlers(io, socket);
 
     socket.on('register_user', async ({ userId, username }) => {
       currentUserId = userId;

@@ -25,9 +25,31 @@ function startBotPlayer(io, match, botId, difficulty) {
   const skill = BOT_SKILL[difficulty] || BOT_SKILL.medium;
   const targetScore = skill.minScore + Math.floor(Math.random() * (skill.maxScore - skill.minScore));
   let score = 0;
-  const interval = setInterval(() => {
+  let botY = 250;
+  let botVel = 0;
+  const gravity = difficulty === 'easy' ? 0.28 : difficulty === 'hard' ? 0.45 : 0.35;
+  const flapStr = difficulty === 'easy' ? -5.5 : difficulty === 'hard' ? -7.5 : -6.5;
+
+  const physicsInterval = setInterval(() => {
     if (match.status !== 'playing' || !match.alive[botId]) {
-      clearInterval(interval);
+      clearInterval(physicsInterval);
+      return;
+    }
+    botVel += gravity;
+    botY += botVel;
+    if (botY > 420) { botY = 420; botVel = 0; }
+    if (botY < 20) { botY = 20; botVel = 0; }
+    // Random flap to stay mid-screen
+    if (botY > 200 + Math.random() * 120 || botVel > 2.5) {
+      botVel = flapStr * (0.8 + Math.random() * 0.4);
+    }
+    io.to(match.id).emit('flappy_bot_pos', { odm: botId, y: Math.round(botY) });
+  }, 50);
+
+  const scoreInterval = setInterval(() => {
+    if (match.status !== 'playing' || !match.alive[botId]) {
+      clearInterval(scoreInterval);
+      clearInterval(physicsInterval);
       botTimers.delete(botId);
       return;
     }
@@ -36,7 +58,8 @@ function startBotPlayer(io, match, botId, difficulty) {
     io.to(match.id).emit('flappy_score_update', { userId: botId, username: match.players[botId]?.username || 'Bot', score });
 
     if (score >= targetScore) {
-      clearInterval(interval);
+      clearInterval(scoreInterval);
+      clearInterval(physicsInterval);
       botTimers.delete(botId);
       match.alive[botId] = false;
       const aliveCount = Object.values(match.alive).filter(Boolean).length;
@@ -49,7 +72,7 @@ function startBotPlayer(io, match, botId, difficulty) {
       if (aliveCount <= 1) finishMatch(io, match);
     }
   }, 800 + Math.floor(Math.random() * 400));
-  botTimers.set(botId, interval);
+  botTimers.set(botId, { scoreInterval, physicsInterval });
 }
 
 function setupFlappyHandlers(io, socket) {
@@ -335,10 +358,11 @@ function setupFlappyHandlers(io, socket) {
 
 async function finishMatch(io, match) {
   match.status = 'finished';
-  // Bot timer'larını temizle
   for (const uid of Object.keys(match.players)) {
     if (uid.startsWith('bot_') && botTimers.has(uid)) {
-      clearInterval(botTimers.get(uid));
+      const t = botTimers.get(uid);
+      if (t && typeof t === 'object') { clearInterval(t.scoreInterval); clearInterval(t.physicsInterval); }
+      else clearInterval(t);
       botTimers.delete(uid);
     }
   }

@@ -30,24 +30,47 @@ function startBotPlayer(io, match, botId, difficulty) {
   const skill = BOT_SKILL[difficulty] || BOT_SKILL.medium;
   const targetScore = skill.minScore + Math.floor(Math.random() * (skill.maxScore - skill.minScore));
   let score = 0;
-  let botY = 250;
-  let botVel = 0;
-  const gravity = difficulty === 'easy' ? 0.28 : difficulty === 'hard' ? 0.45 : 0.35;
-  const flapStr = difficulty === 'easy' ? -5.5 : difficulty === 'hard' ? -7.5 : -6.5;
+
+  const grav = difficulty === 'easy' ? 0.28 : difficulty === 'hard' ? 0.45 : 0.35;
+  const flap = difficulty === 'easy' ? -5.5 : difficulty === 'hard' ? -7.5 : -6.5;
   const scoreMs = difficulty === 'easy' ? 1200 : difficulty === 'hard' ? 600 : 800;
+
+  let botY = 160 + Math.random() * 60;
+  let botVel = 0;
+  let goalY = 140 + Math.random() * 100;
+  let nextGoalTime = Date.now() + 1500 + Math.random() * 1500;
+  let flapCooldown = 0;
 
   const physicsInterval = setInterval(() => {
     if (match.status !== 'playing' || !match.alive[botId]) {
       clearInterval(physicsInterval);
       return;
     }
-    botVel += gravity;
-    botY += botVel;
-    if (botY > 420) { botY = 420; botVel = 0; }
-    if (botY < 20) { botY = 20; botVel = 0; }
-    if (botY > 180 + Math.random() * 140 || botVel > 2.5) {
-      botVel = flapStr * (0.8 + Math.random() * 0.4);
+
+    // Hedefi periyodik değiştir (boru boşluklarını taklit eder)
+    if (Date.now() > nextGoalTime) {
+      goalY = 100 + Math.random() * 180;
+      nextGoalTime = Date.now() + 1200 + Math.random() * 1800;
     }
+
+    botVel += grav;
+    botY += botVel;
+
+    if (botY > 350) { botY = 350; botVel = 0; }
+    if (botY < 15) { botY = 15; botVel = 1; }
+
+    flapCooldown -= 50;
+
+    // Sadece hedefin altındayken ve düşüyorken flap yap
+    const needsFlap = botY > goalY + 8 && botVel > 0.5;
+    // Çok hızlı düşüyorsa acil flap
+    const urgentFlap = botVel > 4;
+
+    if ((needsFlap || urgentFlap) && flapCooldown <= 0) {
+      botVel = flap;
+      flapCooldown = 120 + Math.random() * 80;
+    }
+
     io.to(match.id).emit('flappy_bot_pos', { odm: botId, y: Math.round(botY) });
   }, 50);
 

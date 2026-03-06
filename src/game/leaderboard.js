@@ -118,7 +118,12 @@ function getLevelTiers() {
 async function getOrCreatePlayer(oduserId, username) {
   let user = await UserModel.findOne({ where: { oduserId } });
   if (!user) {
-    user = await UserModel.create({ oduserId, username });
+    let finalUsername = (username || 'Oyuncu').slice(0, 20);
+    let suffix = 0;
+    while (await UserModel.findOne({ where: { username: finalUsername } })) {
+      finalUsername = `${(username || 'Oyuncu').slice(0, 15)}${++suffix}`.slice(0, 20);
+    }
+    user = await UserModel.create({ oduserId, username: finalUsername });
   } else if (username && user.username !== username) {
     user.username = username;
     await user.save();

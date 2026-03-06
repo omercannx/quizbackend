@@ -11,7 +11,10 @@ const {
   FLAPPY_LOBBY_WAIT_MS,
 } = require('../game/flappyMatchmaking');
 const UserModel = require('../models/User');
-const { FlappyMatch, FlappyScore } = require('../models/flappy');
+const { FlappyMatch, FlappyScore, FlappyUser, FlappyQuest } = require('../models/flappy');
+const { DAILY_QUEST_POOL } = require('../routes/flappy');
+
+const privateLobbyMap = new Map();
 
 function setupFlappyHandlers(io, socket) {
   let currentUserId = null;
@@ -98,6 +101,36 @@ function setupFlappyHandlers(io, socket) {
     socket.emit('flappy_queue_left');
   });
 
+  // Power-up kullanımı
+  socket.on('flappy_use_powerup', async ({ matchId, powerupKey }) => {
+    const match = getFlappyMatch(matchId);
+    if (!match || match.status !== 'playing') return;
+    if (!match.alive[currentUserId]) return;
+
+    const fieldMap = { shield: 'shieldCount', slow: 'slowCount', magnet: 'magnetCount', double: 'doubleCount' };
+    const field = fieldMap[powerupKey];
+    if (!field) return;
+
+    try {
+      const user = await FlappyUser.findByPk(currentUserId);
+      if (!user || (user[field] || 0) <= 0) {
+        socket.emit('flappy_powerup_error', { error: 'Power-up yok' });
+        return;
+      }
+      user[field] -= 1;
+      await user.save();
+
+      if (!match.activePowerups) match.activePowerups = {};
+      if (!match.activePowerups[currentUserId]) match.activePowerups[currentUserId] = [];
+      match.activePowerups[currentUserId].push(powerupKey);
+
+      socket.emit('flappy_powerup_activated', { powerupKey, remaining: user[field] });
+      socket.to(matchId).emit('flappy_opponent_powerup', { userId: currentUserId, powerupKey });
+    } catch (e) {
+      console.error('[Flappy] Powerup error:', e?.message);
+    }
+  });
+
   socket.on('flappy_score', ({ matchId, score }) => {
     const match = getFlappyMatch(matchId);
     if (!match || match.status !== 'playing') return;
@@ -121,21 +154,7 @@ function setupFlappyHandlers(io, socket) {
       aliveCount,
     });
     if (aliveCount <= 1) {
-      match.status = 'finished';
-      const winnerId = Object.keys(match.alive).find((id) => match.alive[id]);
-      const leaderboard = Object.entries(match.scores)
-        .map(([uid, s]) => ({ userId: uid, username: match.players[uid]?.username || '?', score: s }))
-        .sort((a, b) => b.score - a.score);
-      io.to(matchId).emit('flappy_game_finished', {
-        matchId: match.id,
-        winnerId,
-        scores: match.scores,
-        leaderboard,
-      });
-      saveFlappyMatchToDb(match.id, match.seed, match.players, match.scores, winnerId).catch((e) =>
-        console.error('[Flappy] DB save error:', e?.message)
-      );
-      setTimeout(() => removeFlappyMatch(matchId), 15000);
+      finishMatch(io, match);
     }
   });
 
@@ -153,27 +172,100 @@ function setupFlappyHandlers(io, socket) {
         aliveCount,
       });
       if (aliveCount <= 1) {
-        match.status = 'finished';
-        const winnerId = Object.keys(match.alive).find((id) => match.alive[id]);
-        const leaderboard = Object.entries(match.scores)
-          .map(([uid, s]) => ({ userId: uid, username: match.players[uid]?.username || '?', score: s }))
-          .sort((a, b) => b.score - a.score);
-        io.to(matchId).emit('flappy_game_finished', {
-          matchId: match.id,
-          winnerId,
-          scores: match.scores,
-          leaderboard,
-        });
-        saveFlappyMatchToDb(match.id, match.seed, match.players, match.scores, winnerId).catch((e) =>
-          console.error('[Flappy] DB save error:', e?.message)
-        );
-        setTimeout(() => removeFlappyMatch(matchId), 15000);
+        finishMatch(io, match);
       }
     }
   });
+
+  // Arkadaşlarla oyna - özel lobi
+  socket.on('flappy_create_private', ({ userId, username }) => {
+    currentUserId = userId;
+    currentUsername = username;
+    const code = Math.random().toString(36).slice(2, 8).toUpperCase();
+    privateLobbyMap.set(code, { host: { socketId: socket.id, userId, username }, players: [{ socketId: socket.id, userId, username }] });
+    socket.join(`private_${code}`);
+    socket.emit('flappy_private_created', { code });
+  });
+
+  socket.on('flappy_join_private', ({ userId, username, code }) => {
+    currentUserId = userId;
+    currentUsername = username;
+    const lobby = privateLobbyMap.get(code);
+    if (!lobby) {
+      socket.emit('flappy_private_error', { error: 'Lobi bulunamadı' });
+      return;
+    }
+    if (lobby.players.length >= 10) {
+      socket.emit('flappy_private_error', { error: 'Lobi dolu' });
+      return;
+    }
+    lobby.players.push({ socketId: socket.id, userId, username });
+    socket.join(`private_${code}`);
+    io.to(`private_${code}`).emit('flappy_private_update', {
+      players: lobby.players.map((p) => ({ userId: p.userId, username: p.username })),
+      code,
+    });
+  });
+
+  socket.on('flappy_start_private', ({ code }) => {
+    const lobby = privateLobbyMap.get(code);
+    if (!lobby) return;
+    if (lobby.host.userId !== currentUserId) return;
+    if (lobby.players.length < 1) return;
+
+    const match = createFlappyMatch(lobby.players);
+    for (const p of lobby.players) {
+      const s = io.sockets.sockets.get(p.socketId);
+      if (s) s.join(match.id);
+    }
+    const playersPayload = lobby.players.map((p) => ({ userId: p.userId, username: p.username, avatar: null }));
+    const startAt = Date.now() + 3000;
+    io.to(`private_${code}`).emit('flappy_match_found', {
+      matchId: match.id,
+      seed: match.seed,
+      players: playersPayload,
+      startAt,
+    });
+    setTimeout(() => {
+      io.to(match.id).emit('flappy_game_start', { matchId: match.id });
+    }, 3000);
+    privateLobbyMap.delete(code);
+  });
 }
 
-async function saveFlappyMatchToDb(matchId, seed, players, scores, winnerId) {
+async function finishMatch(io, match) {
+  match.status = 'finished';
+  const winnerId = Object.keys(match.alive).find((id) => match.alive[id]) || null;
+  const leaderboard = Object.entries(match.scores)
+    .map(([uid, s]) => ({ userId: uid, username: match.players[uid]?.username || '?', score: s }))
+    .sort((a, b) => b.score - a.score);
+
+  // Coin kazandırma
+  const coinGains = {};
+  for (let i = 0; i < leaderboard.length; i++) {
+    const p = leaderboard[i];
+    let coins = 5 + Math.floor(p.score * 2);
+    if (p.userId === winnerId) coins += 20;
+    if (i === 0) coins += 10;
+    coinGains[p.userId] = coins;
+  }
+
+  io.to(match.id).emit('flappy_game_finished', {
+    matchId: match.id,
+    winnerId,
+    scores: match.scores,
+    leaderboard,
+    coinGains,
+  });
+
+  // DB kayıt + kullanıcı güncelleme
+  saveFlappyMatchToDb(match.id, match.seed, match.players, match.scores, winnerId, coinGains).catch((e) =>
+    console.error('[Flappy] DB save error:', e?.message)
+  );
+  setTimeout(() => removeFlappyMatch(match.id), 15000);
+}
+
+async function saveFlappyMatchToDb(matchId, seed, players, scores, winnerId, coinGains) {
   const playerCount = Object.keys(players).length;
   await FlappyMatch.create({
     id: matchId,
@@ -186,15 +278,53 @@ async function saveFlappyMatchToDb(matchId, seed, players, scores, winnerId) {
   const leaderboard = Object.entries(scores)
     .map(([uid, s]) => ({ userId: uid, username: players[uid]?.username || '?', score: s }))
     .sort((a, b) => b.score - a.score);
+
   for (let i = 0; i < leaderboard.length; i++) {
     const p = leaderboard[i];
-    await FlappyScore.create({
-      matchId,
-      userId: p.userId,
-      username: p.username,
-      score: p.score,
-      rank: i + 1,
-    });
+    await FlappyScore.create({ matchId, userId: p.userId, username: p.username, score: p.score, rank: i + 1 });
+
+    // FlappyUser güncelle
+    try {
+      let user = await FlappyUser.findByPk(p.userId);
+      if (!user) {
+        user = await FlappyUser.create({ userId: p.userId, username: p.username });
+      }
+      user.totalGames += 1;
+      user.totalScore += p.score;
+      if (p.score > user.bestScore) user.bestScore = p.score;
+      if (p.userId === winnerId) user.wins += 1;
+      user.coins += (coinGains?.[p.userId] || 5);
+      user.seasonXp += Math.floor(p.score / 2) + 5;
+      await user.save();
+
+      // Görev ilerletme
+      await updateQuests(p.userId, p.score, p.userId === winnerId);
+    } catch (e) {
+      console.error('[Flappy] User update error:', e?.message);
+    }
+  }
+}
+
+async function updateQuests(userId, score, won) {
+  const today = new Date().toISOString().slice(0, 10);
+  const quests = await FlappyQuest.findAll({ where: { userId, questDate: today, completed: false } });
+
+  for (const quest of quests) {
+    const def = DAILY_QUEST_POOL.find((q) => q.key === quest.questKey);
+    if (!def) continue;
+
+    if (def.type === 'games') {
+      quest.progress += 1;
+    } else if (def.type === 'score') {
+      quest.progress += score;
+    } else if (def.type === 'wins' && won) {
+      quest.progress += 1;
+    }
+
+    if (quest.progress >= quest.target) {
+      quest.completed = true;
+    }
+    await quest.save();
   }
 }
 

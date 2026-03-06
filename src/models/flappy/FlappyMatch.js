@@ -9,7 +9,7 @@ const FlappyMatch = flappySequelize.define(
       primaryKey: true,
     },
     seed: {
-      type: DataTypes.INTEGER,
+      type: DataTypes.BIGINT,
       allowNull: false,
     },
     playerCount: {

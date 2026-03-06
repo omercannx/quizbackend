@@ -17,6 +17,7 @@ const path = require('path');
 const adminRoutes = require('./routes/admin');
 const authRoutes = require('./routes/auth');
 const profileRoutes = require('./routes/profile');
+const flappyRoutes = require('./routes/flappy');
 
 const app = express();
 const server = http.createServer(app);
@@ -120,6 +121,7 @@ app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/profile', profileRoutes);
+app.use('/api/flappy', flappyRoutes);
 
 setupGameSocket(io);
 setupChatSocket(io);
@@ -137,7 +139,7 @@ async function startServer() {
     console.log('MySQL (Flappy Bird) bağlantısı başarılı.');
 
     await sequelize.sync();
-    await flappySequelize.sync();
+    await flappySequelize.sync({ alter: true });
     console.log('Tablolar senkronize edildi.');
 
     await seedDatabase();

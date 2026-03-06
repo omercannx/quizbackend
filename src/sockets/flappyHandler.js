@@ -239,13 +239,21 @@ function setupFlappyHandlers(io, socket) {
   });
 
   // Arkadaşlarla oyna - özel lobi
-  socket.on('flappy_create_private', ({ userId, username }) => {
+  socket.on('flappy_create_private', ({ userId, username, difficulty, speedMult, theme }) => {
     currentUserId = userId;
     currentUsername = username;
+    const diff = ['easy', 'medium', 'hard'].includes(difficulty) ? difficulty : 'medium';
+    const spd = [0.75, 1, 1.5, 2].includes(Number(speedMult)) ? Number(speedMult) : 1;
+    const validThemes = ['space', 'classic', 'sunset', 'neon', 'snow'];
+    const thm = validThemes.includes(theme) ? theme : 'space';
     const code = Math.random().toString(36).slice(2, 8).toUpperCase();
-    privateLobbyMap.set(code, { host: { socketId: socket.id, userId, username }, players: [{ socketId: socket.id, userId, username }] });
+    privateLobbyMap.set(code, {
+      host: { socketId: socket.id, userId, username },
+      players: [{ socketId: socket.id, userId, username }],
+      difficulty: diff, speedMult: spd, theme: thm,
+    });
     socket.join(`private_${code}`);
-    socket.emit('flappy_private_created', { code });
+    socket.emit('flappy_private_created', { code, difficulty: diff, speedMult: spd, theme: thm });
   });
 
   socket.on('flappy_join_private', ({ userId, username, code }) => {
@@ -265,6 +273,9 @@ function setupFlappyHandlers(io, socket) {
     io.to(`private_${code}`).emit('flappy_private_update', {
       players: lobby.players.map((p) => ({ userId: p.userId, username: p.username })),
       code,
+      difficulty: lobby.difficulty,
+      speedMult: lobby.speedMult,
+      theme: lobby.theme,
     });
   });
 
@@ -275,6 +286,9 @@ function setupFlappyHandlers(io, socket) {
     if (lobby.players.length < 1) return;
 
     const match = createFlappyMatch(lobby.players);
+    match.difficulty = lobby.difficulty || 'medium';
+    match.speedMult = lobby.speedMult || 1;
+    match.theme = lobby.theme || 'space';
     for (const p of lobby.players) {
       const s = io.sockets.sockets.get(p.socketId);
       if (s) s.join(match.id);
@@ -286,11 +300,29 @@ function setupFlappyHandlers(io, socket) {
       seed: match.seed,
       players: playersPayload,
       startAt,
+      difficulty: lobby.difficulty || 'medium',
+      speedMult: lobby.speedMult || 1,
+      theme: lobby.theme || 'space',
     });
     setTimeout(() => {
       io.to(match.id).emit('flappy_game_start', { matchId: match.id });
     }, 3000);
     privateLobbyMap.delete(code);
+  });
+
+  socket.on('flappy_update_private_settings', ({ code, difficulty, speedMult, theme }) => {
+    const lobby = privateLobbyMap.get(code);
+    if (!lobby) return;
+    if (lobby.host.userId !== currentUserId) return;
+    if (['easy', 'medium', 'hard'].includes(difficulty)) lobby.difficulty = difficulty;
+    if ([0.75, 1, 1.5, 2].includes(Number(speedMult))) lobby.speedMult = Number(speedMult);
+    const validThemes = ['space', 'classic', 'sunset', 'neon', 'snow'];
+    if (validThemes.includes(theme)) lobby.theme = theme;
+    io.to(`private_${code}`).emit('flappy_private_settings', {
+      difficulty: lobby.difficulty,
+      speedMult: lobby.speedMult,
+      theme: lobby.theme,
+    });
   });
 }
 

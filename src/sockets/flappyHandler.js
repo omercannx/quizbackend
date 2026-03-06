@@ -16,91 +16,6 @@ const { DAILY_QUEST_POOL, addXp, checkAchievements, xpForLevel } = require('../r
 
 const privateLobbyMap = new Map();
 const spectatorMap = new Map();
-const botTimers = new Map();
-
-const BOT_NAMES = [
-  'Ahmet', 'Mehmet', 'Ali', 'Mustafa', 'Emre', 'Burak', 'Cem', 'Kaan', 'Mert', 'Efe',
-  'Yusuf', 'Hakan', 'Onur', 'Berk', 'Deniz', 'Arda', 'Eren', 'Tolga', 'Serkan', 'Oğuz',
-  'Ayşe', 'Fatma', 'Zeynep', 'Elif', 'Selin', 'Merve', 'Esra', 'Nur', 'Büşra', 'Derya',
-  'Cansu', 'İrem', 'Gizem', 'Tuğçe', 'Başak', 'Defne', 'Eylül', 'Yağmur', 'Melis', 'Ebru',
-];
-const BOT_SKILL = { easy: { minScore: 10, maxScore: 30 }, medium: { minScore: 15, maxScore: 45 }, hard: { minScore: 25, maxScore: 70 } };
-
-function startBotPlayer(io, match, botId, difficulty) {
-  const skill = BOT_SKILL[difficulty] || BOT_SKILL.medium;
-  const targetScore = skill.minScore + Math.floor(Math.random() * (skill.maxScore - skill.minScore));
-  let score = 0;
-
-  const grav = difficulty === 'easy' ? 0.28 : difficulty === 'hard' ? 0.45 : 0.35;
-  const flapStr = difficulty === 'easy' ? -5.5 : difficulty === 'hard' ? -7.5 : -6.5;
-  const scoreMs = difficulty === 'easy' ? 1200 : difficulty === 'hard' ? 600 : 800;
-  const SUB_STEPS = 3;
-
-  let botY = 170 + Math.random() * 40;
-  let botVel = 0;
-  let goalY = 150 + Math.random() * 80;
-  let nextGoalTime = Date.now() + 2000 + Math.random() * 1500;
-
-  const physicsInterval = setInterval(() => {
-    if (match.status !== 'playing' || !match.alive[botId]) {
-      clearInterval(physicsInterval);
-      return;
-    }
-
-    if (Date.now() > nextGoalTime) {
-      goalY = 140 + Math.random() * 120;
-      nextGoalTime = Date.now() + 1500 + Math.random() * 2000;
-    }
-
-    // Tek flap ~55-60px yukarı taşır, bu yüzden hedefin 35px altında flap yaparak
-    // hedef etrafında +/-30px salınım elde ediyoruz
-    let doFlap = false;
-    if (botY > goalY + 35 && botVel > 1.5) doFlap = true;
-    if (botVel > 7) doFlap = true;
-
-    for (let i = 0; i < SUB_STEPS; i++) {
-      if (doFlap && i === 0) {
-        botVel = flapStr;
-        doFlap = false;
-      }
-      botVel += grav;
-      botY += botVel;
-    }
-
-    if (botY > 330) { botY = 330; botVel = 0; }
-    if (botY < 30) { botY = 30; botVel = 2; }
-
-    io.to(match.id).emit('flappy_bot_pos', { odm: botId, y: Math.round(botY) });
-  }, 50);
-
-  const scoreInterval = setInterval(() => {
-    if (match.status !== 'playing' || !match.alive[botId]) {
-      clearInterval(scoreInterval);
-      clearInterval(physicsInterval);
-      botTimers.delete(botId);
-      return;
-    }
-    score += 1;
-    match.scores[botId] = score;
-    io.to(match.id).emit('flappy_score_update', { userId: botId, username: match.players[botId]?.username || '?', score });
-
-    if (score >= targetScore) {
-      clearInterval(scoreInterval);
-      clearInterval(physicsInterval);
-      botTimers.delete(botId);
-      match.alive[botId] = false;
-      const aliveCount = Object.values(match.alive).filter(Boolean).length;
-      io.to(match.id).emit('flappy_player_died', {
-        userId: botId,
-        username: match.players[botId]?.username || '?',
-        score,
-        aliveCount,
-      });
-      if (aliveCount === 0) finishMatch(io, match);
-    }
-  }, scoreMs + Math.floor(Math.random() * 400));
-  botTimers.set(botId, { scoreInterval, physicsInterval });
-}
 
 function setupFlappyHandlers(io, socket) {
   let currentUserId = null;
@@ -129,17 +44,10 @@ function setupFlappyHandlers(io, socket) {
       if (prev) clearTimeout(prev);
       const t = setTimeout(async () => {
         flappyLobbyTimers.delete(key);
-        let players = takeFlappyLobbyForStart(key);
+        const players = takeFlappyLobbyForStart(key);
         if (!players || players.length === 0) return;
 
-        // Tek oyuncu varsa bot ekle
         const matchDifficulty = players[0]?.difficulty || diff;
-        if (players.length === 1) {
-          const botId = `bot_${Date.now()}`;
-          const botName = BOT_NAMES[Math.floor(Math.random() * BOT_NAMES.length)];
-          players.push({ socketId: null, userId: botId, username: botName, difficulty: matchDifficulty });
-        }
-
         const match = createFlappyMatch(players);
         match.difficulty = matchDifficulty;
         for (const p of players) {
@@ -150,17 +58,17 @@ function setupFlappyHandlers(io, socket) {
         }
         let playersPayload = players.map((p) => ({ userId: p.userId, username: p.username, avatar: null }));
         try {
-          const realIds = players.filter((p) => !p.userId?.startsWith('bot_')).map((p) => p.userId);
-          if (realIds.length > 0 && UserModel) {
+          const userIds = players.map((p) => p.userId);
+          if (userIds.length > 0 && UserModel) {
             const avatarResults = await Promise.all(
-              realIds.map((uid) => UserModel.findOne({ where: { oduserId: uid }, attributes: ['avatar'] }).catch(() => null))
+              userIds.map((uid) => UserModel.findOne({ where: { oduserId: uid }, attributes: ['avatar'] }).catch(() => null))
             );
             const avatarMap = {};
-            realIds.forEach((uid, i) => { avatarMap[uid] = avatarResults[i]?.avatar || null; });
+            userIds.forEach((uid, i) => { avatarMap[uid] = avatarResults[i]?.avatar || null; });
             playersPayload = players.map((p) => ({
               userId: p.userId,
               username: p.username,
-              avatar: p.userId?.startsWith('bot_') ? null : (avatarMap[p.userId] || null),
+              avatar: avatarMap[p.userId] || null,
             }));
           }
         } catch (e) {
@@ -177,12 +85,6 @@ function setupFlappyHandlers(io, socket) {
         });
         setTimeout(() => {
           io.to(match.id).emit('flappy_game_start', { matchId: match.id });
-          // Bot oyuncuları başlat
-          for (const p of players) {
-            if (p.userId.startsWith('bot_')) {
-              startBotPlayer(io, match, p.userId, matchDifficulty);
-            }
-          }
         }, 3000);
       }, FLAPPY_LOBBY_WAIT_MS);
       flappyLobbyTimers.set(key, t);
@@ -386,14 +288,6 @@ function setupFlappyHandlers(io, socket) {
 async function finishMatch(io, match) {
   if (match.status === 'finished') return;
   match.status = 'finished';
-  for (const uid of Object.keys(match.players)) {
-    if (uid.startsWith('bot_') && botTimers.has(uid)) {
-      const t = botTimers.get(uid);
-      if (t && typeof t === 'object') { clearInterval(t.scoreInterval); clearInterval(t.physicsInterval); }
-      else clearInterval(t);
-      botTimers.delete(uid);
-    }
-  }
   const leaderboard = Object.entries(match.scores)
     .map(([uid, s]) => ({ userId: uid, username: match.players[uid]?.username || '?', score: s }))
     .sort((a, b) => b.score - a.score);
@@ -444,12 +338,7 @@ async function saveFlappyMatchToDb(matchId, seed, players, scores, winnerId, coi
 
   for (let i = 0; i < leaderboard.length; i++) {
     const p = leaderboard[i];
-    const isBot = p.userId.startsWith('bot_');
-    if (!isBot) {
-      await FlappyScore.create({ matchId, userId: p.userId, username: p.username, score: p.score, rank: i + 1 });
-    }
-
-    if (isBot) continue;
+    await FlappyScore.create({ matchId, userId: p.userId, username: p.username, score: p.score, rank: i + 1 });
 
     try {
       let user = await FlappyUser.findByPk(p.userId);

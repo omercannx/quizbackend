@@ -16,20 +16,56 @@ const { DAILY_QUEST_POOL, addXp, checkAchievements, xpForLevel } = require('../r
 
 const privateLobbyMap = new Map();
 const spectatorMap = new Map();
+const botTimers = new Map();
+
+const BOT_NAMES = ['FlappyBot', 'BirdMaster', 'PipeDodger', 'SkyRunner', 'WingKing', 'FeatherPro'];
+const BOT_SKILL = { easy: { minScore: 3, maxScore: 12 }, medium: { minScore: 8, maxScore: 25 }, hard: { minScore: 15, maxScore: 50 } };
+
+function startBotPlayer(io, match, botId, difficulty) {
+  const skill = BOT_SKILL[difficulty] || BOT_SKILL.medium;
+  const targetScore = skill.minScore + Math.floor(Math.random() * (skill.maxScore - skill.minScore));
+  let score = 0;
+  const interval = setInterval(() => {
+    if (match.status !== 'playing' || !match.alive[botId]) {
+      clearInterval(interval);
+      botTimers.delete(botId);
+      return;
+    }
+    score += 1;
+    match.scores[botId] = score;
+    io.to(match.id).emit('flappy_score_update', { userId: botId, username: match.players[botId]?.username || 'Bot', score });
+
+    if (score >= targetScore) {
+      clearInterval(interval);
+      botTimers.delete(botId);
+      match.alive[botId] = false;
+      const aliveCount = Object.values(match.alive).filter(Boolean).length;
+      io.to(match.id).emit('flappy_player_died', {
+        userId: botId,
+        username: match.players[botId]?.username || 'Bot',
+        score,
+        aliveCount,
+      });
+      if (aliveCount <= 1) finishMatch(io, match);
+    }
+  }, 800 + Math.floor(Math.random() * 400));
+  botTimers.set(botId, interval);
+}
 
 function setupFlappyHandlers(io, socket) {
   let currentUserId = null;
   let currentUsername = null;
 
-  socket.on('flappy_queue_join', async ({ userId, username }) => {
+  socket.on('flappy_queue_join', async ({ userId, username, difficulty }) => {
     currentUserId = userId;
     currentUsername = username;
+    const diff = ['easy', 'medium', 'hard'].includes(difficulty) ? difficulty : 'medium';
     if (!userId || !username) {
       socket.emit('flappy_queue_error', { error: 'Geçersiz kullanıcı bilgisi' });
       return;
     }
 
-    const playerData = { socketId: socket.id, userId, username };
+    const playerData = { socketId: socket.id, userId, username, difficulty: diff };
     const result = joinFlappyLobby(playerData);
 
     if (result.error) {
@@ -43,9 +79,19 @@ function setupFlappyHandlers(io, socket) {
       if (prev) clearTimeout(prev);
       const t = setTimeout(async () => {
         flappyLobbyTimers.delete(key);
-        const players = takeFlappyLobbyForStart(key);
+        let players = takeFlappyLobbyForStart(key);
         if (!players || players.length === 0) return;
+
+        // Tek oyuncu varsa bot ekle
+        const matchDifficulty = players[0]?.difficulty || diff;
+        if (players.length === 1) {
+          const botId = `bot_${Date.now()}`;
+          const botName = BOT_NAMES[Math.floor(Math.random() * BOT_NAMES.length)];
+          players.push({ socketId: null, userId: botId, username: botName, difficulty: matchDifficulty });
+        }
+
         const match = createFlappyMatch(players);
+        match.difficulty = matchDifficulty;
         for (const p of players) {
           if (p.socketId) {
             const s = io.sockets.sockets.get(p.socketId);
@@ -70,16 +116,23 @@ function setupFlappyHandlers(io, socket) {
         } catch (e) {
           console.error('[Flappy] Avatar fetch error:', e?.message);
         }
-        console.log('[Flappy] Match started:', match.id, 'players:', players.length);
+        console.log('[Flappy] Match started:', match.id, 'players:', players.length, 'difficulty:', matchDifficulty);
         const startAt = Date.now() + 3000;
         io.to(match.id).emit('flappy_match_found', {
           matchId: match.id,
           seed: match.seed,
           players: playersPayload,
           startAt,
+          difficulty: matchDifficulty,
         });
         setTimeout(() => {
           io.to(match.id).emit('flappy_game_start', { matchId: match.id });
+          // Bot oyuncuları başlat
+          for (const p of players) {
+            if (p.userId.startsWith('bot_')) {
+              startBotPlayer(io, match, p.userId, matchDifficulty);
+            }
+          }
         }, 3000);
       }, FLAPPY_LOBBY_WAIT_MS);
       flappyLobbyTimers.set(key, t);
@@ -282,6 +335,13 @@ function setupFlappyHandlers(io, socket) {
 
 async function finishMatch(io, match) {
   match.status = 'finished';
+  // Bot timer'larını temizle
+  for (const uid of Object.keys(match.players)) {
+    if (uid.startsWith('bot_') && botTimers.has(uid)) {
+      clearInterval(botTimers.get(uid));
+      botTimers.delete(uid);
+    }
+  }
   const winnerId = Object.keys(match.alive).find((id) => match.alive[id]) || null;
   const leaderboard = Object.entries(match.scores)
     .map(([uid, s]) => ({ userId: uid, username: match.players[uid]?.username || '?', score: s }))
@@ -332,7 +392,12 @@ async function saveFlappyMatchToDb(matchId, seed, players, scores, winnerId, coi
 
   for (let i = 0; i < leaderboard.length; i++) {
     const p = leaderboard[i];
-    await FlappyScore.create({ matchId, userId: p.userId, username: p.username, score: p.score, rank: i + 1 });
+    const isBot = p.userId.startsWith('bot_');
+    if (!isBot) {
+      await FlappyScore.create({ matchId, userId: p.userId, username: p.username, score: p.score, rank: i + 1 });
+    }
+
+    if (isBot) continue;
 
     try {
       let user = await FlappyUser.findByPk(p.userId);
@@ -347,15 +412,11 @@ async function saveFlappyMatchToDb(matchId, seed, players, scores, winnerId, coi
       user.totalCoinsCollected += (coinsCollected?.[p.userId] || 0);
       user.seasonXp += Math.floor(p.score / 2) + 5;
 
-      // XP kazandır
       const xpGain = 10 + Math.floor(p.score * 1.5) + (p.userId === winnerId ? 25 : 0);
       const leveledUp = addXp(user, xpGain);
       await user.save();
 
-      // Başarım kontrolü
       await checkAchievements(user);
-
-      // Görev ilerletme
       await updateQuests(p.userId, p.score, p.userId === winnerId);
     } catch (e) {
       console.error('[Flappy] User update error:', e?.message);

@@ -85,6 +85,12 @@ function createDrawMatch(players) {
     strokes: [],
     guesses: {},
     scores: {},
+    // Skor sistemi için ek alanlar
+    streaks: {}, // anlık seri
+    maxStreaks: {}, // oyuncu bazlı en uzun seri
+    fastestGuess: null, // { userId, ms, word }
+    spamHistory: {}, // { [userId]: number[] } - timestamp listesi
+    spamMutedUntil: {}, // { [userId]: number } - ms cinsinden timestamp
   };
 
   for (const p of players) {

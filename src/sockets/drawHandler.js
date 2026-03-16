@@ -113,7 +113,7 @@ function setupDrawHandlers(io, socket) {
       io.to(matchId).emit('draw_clear');
     });
 
-    // Tahmin gönderme
+    // Tahmin gönderme + gelişmiş skor sistemi
   socket.on('draw_guess', ({ matchId, userId: guessUserId, username: guessUsername, text }) => {
     const uid = guessUserId || currentUserId;
     const uname = guessUsername || currentUsername;
@@ -122,31 +122,137 @@ function setupDrawHandlers(io, socket) {
     const drawer = getCurrentDrawer(match);
     if (!drawer || drawer.userId === uid) return;
 
+    const now = Date.now();
+
+    // Spam / flood koruması
+    if (!match.spamHistory[uid]) match.spamHistory[uid] = [];
+    if (!match.spamMutedUntil[uid]) match.spamMutedUntil[uid] = 0;
+
+    if (now < match.spamMutedUntil[uid]) {
+      socket.emit('draw_guess_blocked', { reason: 'Çok hızlı tahmin, birkaç saniye bekle.' });
+      return;
+    }
+
     const word = getCurrentWord(match);
     const isCorrect = checkGuess(text, word);
 
     if (isCorrect) {
       match.guesses[uid] = { correct: true, text: (text || '').trim() };
-      match.scores[uid] = (match.scores[uid] || 0) + DRAW_POINTS_CORRECT;
-        match.scores[drawer.userId] = (match.scores[drawer.userId] || 0) + DRAW_POINTS_DRAWER;
+
+      // --- Zaman bonusu ---
+      const elapsedMs = match.roundStartTime ? now - match.roundStartTime : DRAW_ROUND_TIME_MS;
+      let timeBonus = 0;
+      if (elapsedMs <= 5000) {
+        timeBonus = 50;
+      } else if (elapsedMs <= 15000) {
+        timeBonus = 30;
+      } else if (elapsedMs <= 30000) {
+        timeBonus = 10;
+      }
+
+      // --- Zorluk çarpanı (kelime uzunluğuna göre yaklaşık) ---
+      const cleanWord = (word || '').replace(/\s+/g, '');
+      const len = cleanWord.length;
+      let difficulty = 'easy';
+      let difficultyMultiplier = 1;
+      if (len >= 10) {
+        difficulty = 'hard';
+        difficultyMultiplier = 1.6;
+      } else if (len >= 6) {
+        difficulty = 'medium';
+        difficultyMultiplier = 1.3;
+      }
+
+      // --- Seri (streak) çarpanı ---
+      const prevStreak = match.streaks[uid] || 0;
+      const newStreak = prevStreak + 1;
+      match.streaks[uid] = newStreak;
+      const prevMax = match.maxStreaks[uid] || 0;
+      if (newStreak > prevMax) match.maxStreaks[uid] = newStreak;
+
+      let streakMultiplier = 1;
+      if (newStreak >= 5) streakMultiplier = 2;
+      else if (newStreak >= 3) streakMultiplier = 1.5;
+      else if (newStreak >= 2) streakMultiplier = 1.2;
+
+      const baseGuessPoints = DRAW_POINTS_CORRECT;
+      const baseDrawerPoints = DRAW_POINTS_DRAWER;
+
+      const rawGuessPoints = baseGuessPoints + timeBonus;
+      const finalGuessPoints = Math.round(rawGuessPoints * streakMultiplier * difficultyMultiplier);
+      const finalDrawerPoints = Math.round(baseDrawerPoints * difficultyMultiplier);
+
+      match.scores[uid] = (match.scores[uid] || 0) + finalGuessPoints;
+      match.scores[drawer.userId] = (match.scores[drawer.userId] || 0) + finalDrawerPoints;
+
+      // En hızlı bilen istatistiği
+      if (!match.fastestGuess || elapsedMs < match.fastestGuess.ms) {
+        match.fastestGuess = {
+          userId: uid,
+          username: uname,
+          ms: elapsedMs,
+          word,
+        };
+      }
 
       io.to(matchId).emit('draw_guess_correct', {
         userId: uid,
         username: uname,
-          text: text.trim(),
-          word,
-          scores: match.scores,
-        });
-        if (match.roundTimer) {
-          clearTimeout(match.roundTimer);
-          match.roundTimer = null;
-        }
+        text: text.trim(),
+        word,
+        scores: match.scores,
+        meta: {
+          timeMs: elapsedMs,
+          timeBonus,
+          streak: newStreak,
+          streakMultiplier,
+          difficulty,
+          difficultyMultiplier,
+          gained: {
+            guesser: finalGuessPoints,
+            drawer: finalDrawerPoints,
+          },
+        },
+      });
+
+      if (match.roundTimer) {
+        clearTimeout(match.roundTimer);
+        match.roundTimer = null;
+      }
       nextDrawRound(io, match);
     } else {
+      // Yanlış tahminde seri sıfırlama
+      match.streaks[uid] = 0;
+
+      // Spam takibi: son 5 saniyedeki tahmin sayısına göre ceza
+      const history = match.spamHistory[uid];
+      history.push(now);
+      const windowMs = 5000;
+      const minGapMs = 300; // çok sık arka arkaya
+      // Eski kayıtları temizle
+      while (history.length && now - history[0] > windowMs) {
+        history.shift();
+      }
+      const tooManyGuesses = history.length >= 8;
+      const recentFastGuesses = history.slice(-3).every((t, idx, arr) =>
+        idx === 0 ? true : t - arr[idx - 1] < minGapMs
+      );
+
+      let penalty = 0;
+      let mutedMs = 0;
+      if (tooManyGuesses || recentFastGuesses) {
+        penalty = 5;
+        mutedMs = 3000;
+        match.scores[uid] = (match.scores[uid] || 0) - penalty;
+        match.spamMutedUntil[uid] = now + mutedMs;
+      }
+
       io.to(matchId).emit('draw_guess_wrong', {
         userId: uid,
         username: uname,
         text: (text || '').trim().slice(0, 50),
+        penalty,
+        mutedMs,
       });
     }
   });
@@ -319,6 +425,21 @@ function startDrawRound(io, match, playersPayload) {
 
   match.roundTimer = setTimeout(() => {
     match.roundTimer = null;
+
+    // Kimse bilemediyse çizen için küçük ceza
+    const drawerId = drawer.userId;
+    const anyCorrect = Object.values(match.guesses || {}).some((g) => g.correct);
+    if (!anyCorrect && drawerId) {
+      match.scores[drawerId] = (match.scores[drawerId] || 0) - 10;
+      io.to(match.id).emit('draw_round_timeout', {
+        drawerId,
+        drawerUsername: drawer.username,
+        word,
+        penalty: 10,
+        scores: match.scores,
+      });
+    }
+
     nextDrawRound(io, match);
   }, DRAW_ROUND_TIME_MS);
 
@@ -374,11 +495,40 @@ function endDrawGame(io, match) {
 
   const winnerId = leaderboard[0]?.userId || null;
 
+  // Ek istatistikler: en uzun seri, en hızlı bilen
+  let bestStreakUser = null;
+  let bestStreakValue = 0;
+  for (const [uid, value] of Object.entries(match.maxStreaks || {})) {
+    if (value > bestStreakValue) {
+      bestStreakValue = value;
+      bestStreakUser = uid;
+    }
+  }
+
+  const fastestGuess = match.fastestGuess || null;
+
   io.to(match.id).emit('draw_game_finished', {
     matchId: match.id,
     scores: match.scores,
     leaderboard,
     winnerId,
+    stats: {
+      bestStreak: bestStreakUser
+        ? {
+            userId: bestStreakUser,
+            username: match.players[bestStreakUser]?.username || 'Bilinmiyor',
+            value: bestStreakValue,
+          }
+        : null,
+      fastestGuess: fastestGuess
+        ? {
+            userId: fastestGuess.userId,
+            username: fastestGuess.username,
+            timeMs: fastestGuess.ms,
+            word: fastestGuess.word,
+          }
+        : null,
+    },
   });
 
   setTimeout(() => removeDrawMatch(match.id), 15000);

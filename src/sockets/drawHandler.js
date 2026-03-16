@@ -22,6 +22,8 @@ const DRAW_KICK_VOTE_TIMEOUT_MS = 30000;
 const DRAW_KICK_MIN_YES = 3;
 const UserModel = require('../models/User');
 
+const drawPrivateLobbyMap = new Map();
+
 function setupDrawHandlers(io, socket) {
   let currentUserId = null;
   let currentUsername = null;
@@ -412,6 +414,119 @@ function setupDrawHandlers(io, socket) {
         }
       }
     }
+  });
+
+  // === Özel Oda (Private Room) ===
+
+  socket.on('draw_create_private', ({ userId, username }) => {
+    currentUserId = userId;
+    currentUsername = username;
+    if (!userId || !username) {
+      socket.emit('draw_private_error', { error: 'Geçersiz kullanıcı bilgisi' });
+      return;
+    }
+
+    const code = Math.random().toString(36).slice(2, 8).toUpperCase();
+    drawPrivateLobbyMap.set(code, {
+      host: { socketId: socket.id, userId, username },
+      players: [{ socketId: socket.id, userId, username }],
+      createdAt: Date.now(),
+    });
+
+    socket.join(`draw_private_${code}`);
+    socket.emit('draw_private_created', {
+      code,
+      players: [{ userId, username }],
+    });
+    console.log('[Draw] Private room created:', code, 'by', username);
+  });
+
+  socket.on('draw_join_private', ({ userId, username, code }) => {
+    currentUserId = userId;
+    currentUsername = username;
+    const lobby = drawPrivateLobbyMap.get(code);
+    if (!lobby) {
+      socket.emit('draw_private_error', { error: 'Oda bulunamadı' });
+      return;
+    }
+    if (lobby.players.length >= 10) {
+      socket.emit('draw_private_error', { error: 'Oda dolu' });
+      return;
+    }
+
+    const already = lobby.players.find((p) => p.userId === userId);
+    if (!already) {
+      lobby.players.push({ socketId: socket.id, userId, username });
+    } else {
+      already.socketId = socket.id;
+    }
+
+    socket.join(`draw_private_${code}`);
+    io.to(`draw_private_${code}`).emit('draw_private_update', {
+      code,
+      players: lobby.players.map((p) => ({ userId: p.userId, username: p.username })),
+    });
+    console.log('[Draw] Player joined private room:', code, username);
+  });
+
+  socket.on('draw_start_private', ({ code }) => {
+    const lobby = drawPrivateLobbyMap.get(code);
+    if (!lobby) return;
+    if (lobby.host.userId !== currentUserId) {
+      socket.emit('draw_private_error', { error: 'Sadece oda sahibi başlatabilir' });
+      return;
+    }
+    if (lobby.players.length < 2) {
+      socket.emit('draw_private_error', { error: 'En az 2 oyuncu gerekli' });
+      return;
+    }
+
+    const match = createDrawMatch(lobby.players);
+    for (const p of lobby.players) {
+      const s = io.sockets.sockets.get(p.socketId);
+      if (s) s.join(match.id);
+    }
+
+    const playersPayload = lobby.players.map((p) => ({
+      userId: p.userId,
+      username: p.username,
+      avatar: null,
+    }));
+
+    io.to(`draw_private_${code}`).emit('draw_match_found', {
+      matchId: match.id,
+      players: playersPayload,
+    });
+
+    setTimeout(() => {
+      startDrawRound(io, match, playersPayload);
+    }, 3000);
+
+    drawPrivateLobbyMap.delete(code);
+    console.log('[Draw] Private match started:', match.id, 'players:', lobby.players.length);
+  });
+
+  socket.on('draw_leave_private', ({ code }) => {
+    const lobby = drawPrivateLobbyMap.get(code);
+    if (!lobby) return;
+
+    socket.leave(`draw_private_${code}`);
+    lobby.players = lobby.players.filter((p) => p.socketId !== socket.id);
+
+    if (lobby.players.length === 0) {
+      drawPrivateLobbyMap.delete(code);
+      return;
+    }
+
+    // Eğer host çıktıysa, yeni host ata
+    if (lobby.host.socketId === socket.id && lobby.players.length > 0) {
+      lobby.host = lobby.players[0];
+    }
+
+    io.to(`draw_private_${code}`).emit('draw_private_update', {
+      code,
+      players: lobby.players.map((p) => ({ userId: p.userId, username: p.username })),
+    });
   });
 }
 

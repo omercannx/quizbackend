@@ -117,8 +117,11 @@ app.all('/api/auth/google-redirect-debug', (req, res) => {
   res.json({ ok: true });
 });
 
-app.get('/api/version', (req, res) => {
-  res.json({
+const fs = require('fs');
+const VERSION_FILE = path.join(__dirname, '../data/app-version.json');
+
+function getVersionConfig() {
+  const defaults = {
     latestVersion: '1.0.0',
     minVersion: '1.0.0',
     updateMessage: 'Yeni özellikler ve hata düzeltmeleri mevcut!',
@@ -126,7 +129,23 @@ app.get('/api/version', (req, res) => {
       android: 'https://play.google.com/store/apps/details?id=com.quizarena.app',
       ios: 'https://apps.apple.com/app/idXXXXXXXXX',
     },
-  });
+  };
+  try {
+    if (fs.existsSync(VERSION_FILE)) {
+      return { ...defaults, ...JSON.parse(fs.readFileSync(VERSION_FILE, 'utf-8')) };
+    }
+  } catch {}
+  return defaults;
+}
+
+function saveVersionConfig(config) {
+  const dir = path.dirname(VERSION_FILE);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(VERSION_FILE, JSON.stringify(config, null, 2), 'utf-8');
+}
+
+app.get('/api/version', (req, res) => {
+  res.json(getVersionConfig());
 });
 
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));

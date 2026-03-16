@@ -1006,4 +1006,57 @@ router.post('/test/complete-user-quests', async (req, res) => {
   }
 });
 
+// ── APP VERSİYON YÖNETİMİ ──
+const fs = require('fs');
+const path = require('path');
+const VERSION_FILE = path.join(__dirname, '../../data/app-version.json');
+
+function getVersionConfig() {
+  const defaults = {
+    latestVersion: '1.0.0',
+    minVersion: '1.0.0',
+    updateMessage: 'Yeni özellikler ve hata düzeltmeleri mevcut!',
+    storeUrl: {
+      android: 'https://play.google.com/store/apps/details?id=com.quizarena.app',
+      ios: 'https://apps.apple.com/app/idXXXXXXXXX',
+    },
+  };
+  try {
+    if (fs.existsSync(VERSION_FILE)) {
+      return { ...defaults, ...JSON.parse(fs.readFileSync(VERSION_FILE, 'utf-8')) };
+    }
+  } catch {}
+  return defaults;
+}
+
+function saveVersionConfig(config) {
+  const dir = path.dirname(VERSION_FILE);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(VERSION_FILE, JSON.stringify(config, null, 2), 'utf-8');
+}
+
+router.get('/version', (req, res) => {
+  res.json(getVersionConfig());
+});
+
+router.put('/version', (req, res) => {
+  try {
+    const current = getVersionConfig();
+    const { latestVersion, minVersion, updateMessage, storeUrl } = req.body;
+    if (latestVersion) current.latestVersion = String(latestVersion).trim();
+    if (minVersion) current.minVersion = String(minVersion).trim();
+    if (updateMessage !== undefined) current.updateMessage = String(updateMessage).trim();
+    if (storeUrl) {
+      if (typeof storeUrl === 'object') {
+        if (storeUrl.android) current.storeUrl.android = String(storeUrl.android).trim();
+        if (storeUrl.ios) current.storeUrl.ios = String(storeUrl.ios).trim();
+      }
+    }
+    saveVersionConfig(current);
+    res.json({ success: true, ...current });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 module.exports = router;

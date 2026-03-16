@@ -117,6 +117,18 @@ app.all('/api/auth/google-redirect-debug', (req, res) => {
   res.json({ ok: true });
 });
 
+app.get('/api/version', (req, res) => {
+  res.json({
+    latestVersion: '1.0.0',
+    minVersion: '1.0.0',
+    updateMessage: 'Yeni özellikler ve hata düzeltmeleri mevcut!',
+    storeUrl: {
+      android: 'https://play.google.com/store/apps/details?id=com.quizarena.app',
+      ios: 'https://apps.apple.com/app/idXXXXXXXXX',
+    },
+  });
+});
+
 app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 app.use('/api/auth', authRoutes);
 app.use('/api/admin', adminRoutes);

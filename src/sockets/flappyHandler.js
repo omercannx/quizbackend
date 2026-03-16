@@ -120,19 +120,30 @@ function setupFlappyHandlers(io, socket) {
   socket.on('flappy_use_powerup', async ({ matchId, powerupKey }) => {
     const match = getFlappyMatch(matchId);
     if (!match || match.status !== 'playing') return;
-    if (!match.alive[currentUserId]) return;
+    if (!currentUserId || !match.alive[currentUserId]) return;
 
     const fieldMap = { shield: 'shieldCount', slow: 'slowCount', magnet: 'magnetCount', double: 'doubleCount' };
     const field = fieldMap[powerupKey];
     if (!field) return;
 
     try {
-      const user = await FlappyUser.findByPk(currentUserId);
-      if (!user || (user[field] || 0) <= 0) {
-        socket.emit('flappy_powerup_error', { error: 'Power-up yok' });
+      let user = await FlappyUser.findOne({ where: { userId: currentUserId } });
+      if (!user) {
+        user = await FlappyUser.create({
+          userId: currentUserId,
+          username: currentUsername || 'Oyuncu',
+          shieldCount: 3,
+          slowCount: 2,
+          magnetCount: 2,
+          doubleCount: 2,
+        });
+      }
+      const count = user[field] || 0;
+      if (count <= 0) {
+        socket.emit('flappy_powerup_error', { error: 'Power-up yok', powerupKey });
         return;
       }
-      user[field] -= 1;
+      user[field] = count - 1;
       await user.save();
 
       if (!match.activePowerups) match.activePowerups = {};
@@ -143,6 +154,7 @@ function setupFlappyHandlers(io, socket) {
       socket.to(matchId).emit('flappy_opponent_powerup', { userId: currentUserId, powerupKey });
     } catch (e) {
       console.error('[Flappy] Powerup error:', e?.message);
+      socket.emit('flappy_powerup_error', { error: 'Bir hata oluştu', powerupKey });
     }
   });
 
